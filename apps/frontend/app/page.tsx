@@ -1,8 +1,8 @@
 import type { Metadata } from "next"
 
-import { UrlForm } from "@/components/capture/url-form"
 import { HowItWorks } from "@/components/landing/how-it-works"
 import { SiteHeader } from "@/components/landing/site-header"
+import { StartRedesignForm } from "@/components/site-revive/start-redesign-form"
 
 export const metadata: Metadata = {
   title: "SiteRevive | Give Your Website a New Life",
@@ -32,7 +32,7 @@ export default function Home() {
               with AI.
             </p>
 
-            <UrlForm className="mt-10" />
+            <StartRedesignForm className="mt-10" />
           </section>
         </main>
       </div>
