@@ -9,14 +9,20 @@ import {
   PreviewToolbar,
   type ViewMode,
 } from "@/components/site-revive/preview-toolbar"
+import {
+  PromptEditor,
+  type PromptEditFeedback,
+} from "@/components/site-revive/prompt-editor"
 import { ProcessingFallback } from "@/components/site-revive/processing-fallback"
 import { WebsiteRenderer } from "@/components/site-revive/website-renderer"
+import { DEMO_EDIT_COMMANDS, editWebsiteDesign } from "@/lib/design-editor"
 import {
   parseStoredProject,
   readStoredProjectJson,
   type StoredProject,
 } from "@/lib/redesign-session"
 import { cn } from "@/lib/utils"
+import type { WebsiteDesign } from "@/types/website"
 
 type StoredProjectState =
   | { status: "loading" }
@@ -81,12 +87,23 @@ export function PreviewWorkspace() {
   const state = useStoredProject()
   const [mode, setMode] = useState<ViewMode>("compare")
   const [device, setDevice] = useState<Device>("desktop")
+  // Design after prompt edits. null until the first successful edit, so the
+  // stored design is used as-is. Edits are kept in memory only (reset on refresh).
+  const [editedDesign, setEditedDesign] = useState<WebsiteDesign | null>(null)
 
   if (state.status === "loading") return <ProcessingFallback />
   if (state.status === "empty") return <PreviewEmptyState />
 
   const { sourceUrl, result } = state.project
+  const design = editedDesign ?? result.design
   const hostname = hostnameOf(sourceUrl)
+
+  async function applyPrompt(instruction: string): Promise<PromptEditFeedback> {
+    const edit = await editWebsiteDesign(design, instruction)
+    if (!edit.ok) return { ok: false, message: edit.error }
+    if (edit.changed) setEditedDesign(edit.design)
+    return { ok: true, message: edit.summary }
+  }
   const showBefore = mode === "before" || mode === "compare"
   const showAfter = mode === "after" || mode === "compare"
 
@@ -99,6 +116,14 @@ export function PreviewWorkspace() {
         device={device}
         onDeviceChange={setDevice}
       />
+
+      {showAfter ? (
+        <PromptEditor
+          onApply={applyPrompt}
+          examples={DEMO_EDIT_COMMANDS}
+          className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4 sm:p-5"
+        />
+      ) : null}
 
       <div
         className={cn(
@@ -127,7 +152,7 @@ export function PreviewWorkspace() {
             tone="after"
           >
             <DeviceFrame device={device} address={`${hostname} (redesign preview)`}>
-              <WebsiteRenderer design={result.design} className="h-full" />
+              <WebsiteRenderer design={design} className="h-full" />
             </DeviceFrame>
           </PreviewPane>
         ) : null}
