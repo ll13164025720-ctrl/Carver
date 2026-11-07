@@ -43,16 +43,33 @@ export function saveProject(sourceUrl: string, result: RedesignResult): boolean 
   }
 }
 
-/** Returns null if nothing is stored or the stored data is not a valid project. */
-export function loadProject(): StoredProject | null {
+/**
+ * The stored project exactly as saved (a JSON string), or null if there is
+ * none. A string is a stable value, so React's useSyncExternalStore can compare
+ * it between renders. Parse it with `parseStoredProject`.
+ */
+export function readStoredProjectJson(): string | null {
   try {
-    const raw = window.sessionStorage.getItem(STORAGE_KEY)
-    if (!raw) return null
+    return window.sessionStorage.getItem(STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
+
+/** Returns null if the JSON is missing, malformed or not a valid project. */
+export function parseStoredProject(raw: string | null): StoredProject | null {
+  if (!raw) return null
+  try {
     const parsed: unknown = JSON.parse(raw)
     return isStoredProject(parsed) ? parsed : null
   } catch {
     return null
   }
+}
+
+/** Returns null if nothing is stored or the stored data is not a valid project. */
+export function loadProject(): StoredProject | null {
+  return parseStoredProject(readStoredProjectJson())
 }
 
 export function clearProject(): void {

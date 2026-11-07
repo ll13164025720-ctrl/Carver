@@ -234,7 +234,9 @@ export async function mockRedesign(url: string): Promise<RedesignResult> {
 
   return {
     projectId: projectIdFor(parsed),
-    originalScreenshotUrl: placeholder(1280, 800, "Original website"),
+    // Local sample image (public/samples). A real backend will return a URL
+    // to a captured screenshot instead.
+    originalScreenshotUrl: "/samples/original-website.svg",
     // Copy so callers can edit the result without changing the shared sample.
     design: structuredClone(mockCafeDesign),
   }

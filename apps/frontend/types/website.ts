@@ -210,7 +210,7 @@ export interface WebsiteDesign {
 /** What a redesign request returns. */
 export interface RedesignResult {
   projectId: string
-  /** Screenshot of the original site, as an absolute http(s) URL. */
+  /** Screenshot of the original site: an absolute http(s) URL or a site-relative path. */
   originalScreenshotUrl: string
   design: WebsiteDesign
 }
