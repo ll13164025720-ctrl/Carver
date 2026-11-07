@@ -4,11 +4,13 @@
   "private": true,
   "workspaces": [
     "apps/frontend",
-    "apps/backend"
+    "apps/backend",
+    "apps/capture-worker"
   ],
   "scripts": {
     "dev:frontend": "npm run dev --workspace=apps/frontend",
     "build": "npm run build --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "dev:capture": "npm run dev --workspace=@siterevive/capture-worker"
   }
 }
