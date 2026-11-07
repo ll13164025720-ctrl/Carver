@@ -173,7 +173,7 @@ type ApiConfig = { mode: "mock" } | { mode: "api"; baseUrl: string }
 function configError(detail: string): SiteReviveApiError {
   return new SiteReviveApiError(
     "config",
-    `SiteRevive is not configured correctly: ${detail}`
+    `CARVER is not configured correctly: ${detail}`
   )
 }
 
@@ -292,7 +292,7 @@ export function isWebsiteDesign(value: unknown): value is WebsiteDesign {
 function invalidResponse(what: string): SiteReviveApiError {
   return new SiteReviveApiError(
     "invalid_response",
-    `The SiteRevive service sent a ${what} we couldn't read. Please try again.`,
+    `The CARVER service sent a ${what} we couldn't read. Please try again.`,
     { retryable: true }
   )
 }
@@ -349,7 +349,7 @@ function httpError(status: number, text: string, operation: Operation): SiteRevi
   if (status === 400 || status === 422) {
     return new SiteReviveApiError(
       "bad_request",
-      serverMessage(text) ?? "The SiteRevive service could not accept that request.",
+      serverMessage(text) ?? "The CARVER service could not accept that request.",
       { status }
     )
   }
@@ -358,14 +358,14 @@ function httpError(status: number, text: string, operation: Operation): SiteRevi
       "not_found",
       operation === "edit"
         ? "This project is no longer available. Start a new redesign."
-        : "The SiteRevive service could not be found. Please try again later.",
+        : "The CARVER service could not be found. Please try again later.",
       { status }
     )
   }
   if (status === 408 || status === 504) {
     return new SiteReviveApiError(
       "timeout",
-      "The SiteRevive service took too long to answer. Please try again.",
+      "The CARVER service took too long to answer. Please try again.",
       { status, retryable: true }
     )
   }
@@ -378,7 +378,7 @@ function httpError(status: number, text: string, operation: Operation): SiteRevi
   }
   return new SiteReviveApiError(
     "server",
-    "The SiteRevive service ran into a problem. Please try again.",
+    "The CARVER service ran into a problem. Please try again.",
     { status, retryable: status >= 500 }
   )
 }
@@ -430,7 +430,7 @@ async function postJson(
       }
       throw new SiteReviveApiError(
         "network",
-        "We couldn't reach the SiteRevive service. Check your connection and try again.",
+        "We couldn't reach the CARVER service. Check your connection and try again.",
         { retryable: true, cause }
       )
     }
@@ -438,7 +438,7 @@ async function postJson(
     if (response.status === 202) {
       throw new SiteReviveApiError(
         "async_unsupported",
-        "The SiteRevive service started a background job, which this version of the app can't follow yet.",
+        "The CARVER service started a background job, which this version of the app can't follow yet.",
         { status: 202 }
       )
     }

@@ -71,13 +71,15 @@ function PreviewPane({ label, caption, tone, children }: PreviewPaneProps) {
       <div className="mb-3 flex items-center gap-3">
         <span
           className={cn(
-            "rounded-full px-3 py-1 text-xs font-semibold tracking-wide uppercase",
-            tone === "after" ? "bg-violet-600 text-white" : "bg-white/15 text-white"
+            "rounded-md px-2.5 py-1 text-xs font-medium tracking-[0.12em] uppercase",
+            tone === "after"
+              ? "bg-gold text-forest"
+              : "border border-cream/30 text-cream"
           )}
         >
           {label}
         </span>
-        <span className="truncate text-sm text-white/50">{caption}</span>
+        <span className="truncate text-sm text-cream/65">{caption}</span>
       </div>
       {children}
     </section>
@@ -135,13 +137,13 @@ export function PreviewWorkspace() {
         <PromptEditor
           onApply={applyPrompt}
           examples={DEMO_EDIT_COMMANDS}
-          className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4 sm:p-5"
+          className="cv-surface mt-8 p-5 sm:p-6"
         />
       ) : null}
 
       <div
         className={cn(
-          "mt-8 grid items-start gap-10",
+          "mt-10 grid items-start gap-12",
           mode === "compare" && "lg:grid-cols-2"
         )}
       >

@@ -39,7 +39,7 @@ export function ProcessingStages({
   className,
 }: ProcessingStagesProps) {
   return (
-    <ol className={cn("flex flex-col gap-1", className)}>
+    <ol className={cn("flex flex-col gap-1.5", className)}>
       {stages.map((label, index) => {
         const state = stateFor(index, activeIndex, status)
         return (
@@ -47,35 +47,35 @@ export function ProcessingStages({
             key={label}
             aria-current={state === "active" ? "step" : undefined}
             className={cn(
-              "flex items-center gap-3 rounded-xl px-3 py-3 transition-colors",
-              state === "active" && "bg-white/5",
-              state === "failed" && "bg-red-500/10"
+              "flex items-center gap-4 rounded-lg border border-transparent px-4 py-3.5 transition-colors",
+              state === "active" && "border-cream/15 bg-cream/[0.06]",
+              state === "failed" && "border-(--cv-error)/40 bg-(--cv-error)/10"
             )}
           >
             <span className="flex size-6 shrink-0 items-center justify-center">
               {state === "done" ? (
-                <CircleCheck className="size-5 text-violet-400" aria-hidden />
+                <CircleCheck className="size-5 text-gold" aria-hidden />
               ) : null}
               {state === "active" ? (
                 <LoaderCircle
-                  className="size-5 text-violet-400 motion-safe:animate-spin"
+                  className="size-5 text-cream motion-safe:animate-spin"
                   aria-hidden
                 />
               ) : null}
               {state === "failed" ? (
-                <CircleAlert className="size-5 text-red-400" aria-hidden />
+                <CircleAlert className="size-5 text-(--cv-error)" aria-hidden />
               ) : null}
               {state === "pending" ? (
-                <Circle className="size-5 text-white/25" aria-hidden />
+                <Circle className="size-5 text-cream/30" aria-hidden />
               ) : null}
             </span>
             <span
               className={cn(
                 "text-base",
-                state === "active" && "font-medium text-white",
-                state === "done" && "text-white/80",
-                state === "failed" && "font-medium text-red-300",
-                state === "pending" && "text-white/50"
+                state === "active" && "font-medium text-cream",
+                state === "done" && "text-cream/80",
+                state === "failed" && "font-medium text-(--cv-error)",
+                state === "pending" && "text-cream/60"
               )}
             >
               {label}
