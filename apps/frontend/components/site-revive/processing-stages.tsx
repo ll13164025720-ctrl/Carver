@@ -75,7 +75,7 @@ export function ProcessingStages({
                 state === "active" && "font-medium text-white",
                 state === "done" && "text-white/80",
                 state === "failed" && "font-medium text-red-300",
-                state === "pending" && "text-white/40"
+                state === "pending" && "text-white/50"
               )}
             >
               {label}

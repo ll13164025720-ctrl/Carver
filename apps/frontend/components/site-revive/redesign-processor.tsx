@@ -16,6 +16,7 @@ import {
   startRedesignJob,
 } from "@/lib/redesign-job"
 import { clearProject, saveProject } from "@/lib/redesign-session"
+import { isMockMode } from "@/lib/site-revive-api"
 import { cn } from "@/lib/utils"
 import { validateWebsiteUrl } from "@/lib/validate-url"
 
@@ -76,6 +77,7 @@ type ProcessingViewProps = {
 
 function ProcessingView({ url, hostname, simulateFailure }: ProcessingViewProps) {
   const router = useRouter()
+  const mockMode = isMockMode()
   const [attempt, setAttempt] = useState(0)
   const [phase, setPhase] = useState<Phase>({ status: "running" })
   const [stageIndex, setStageIndex] = useState(0)
@@ -169,10 +171,12 @@ function ProcessingView({ url, hostname, simulateFailure }: ProcessingViewProps)
 
   return (
     <Shell>
-      <p className="mb-4 inline-flex w-fit items-center gap-2 rounded-full border border-white/15 px-3 py-1 text-xs font-medium text-white/70">
-        <FlaskConical className="size-3.5" aria-hidden />
-        Demo mode
-      </p>
+      {mockMode ? (
+        <p className="mb-4 inline-flex w-fit items-center gap-2 rounded-full border border-white/15 px-3 py-1 text-xs font-medium text-white/70">
+          <FlaskConical className="size-3.5" aria-hidden />
+          Demo mode
+        </p>
+      ) : null}
 
       <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
         {heading}
@@ -196,9 +200,19 @@ function ProcessingView({ url, hostname, simulateFailure }: ProcessingViewProps)
       />
 
       <p className="mt-6 text-sm leading-6 text-white/50">
-        These steps are simulated. In demo mode we don&apos;t contact{" "}
-        {hostname} or analyze it, and the preview will show a sample café design
-        instead of your own content.
+        {mockMode ? (
+          <>
+            These steps are simulated. In demo mode we don&apos;t contact{" "}
+            {hostname} or analyze it, and the preview will show a sample café
+            design instead of your own content.
+          </>
+        ) : (
+          <>
+            This can take a minute or two while we visit {hostname} and design
+            your preview. The steps above are an estimate of progress. Please
+            keep this tab open.
+          </>
+        )}
       </p>
 
       <div role="status" aria-live="polite" className="sr-only">

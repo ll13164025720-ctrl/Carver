@@ -1,12 +1,14 @@
-import { mockRedesign } from "@/lib/mock-site-revive"
+import { isMockMode, redesignWebsite } from "@/lib/site-revive-api"
 import type { RedesignResult } from "@/types/website"
 
 /**
- * Runs the mock redesign and paces it so the UI can show stages.
+ * Runs a redesign through the SiteRevive API client and tracks it for the UI.
  *
- * MOCK MODE: the stages below are simulated by a timer. They do not reflect
- * real work. When a real backend exists, replace `run` with the API call and
- * drive the stage list from real progress events.
+ * The stages below are driven by a timer in both modes. They do not reflect
+ * real work. In mock mode the result is held back so every stage is visible.
+ * In API mode the result is shown as soon as the backend answers. Real
+ * per-stage progress needs a status contract from the backend (see the
+ * asynchronous jobs section in lib/site-revive-api.ts).
  */
 
 export const REDESIGN_STAGES = [
@@ -39,6 +41,9 @@ async function run(
   url: string,
   options: { simulateFailure?: boolean }
 ): Promise<RedesignResult> {
+  // Real backend: no artificial delay and no simulated failure.
+  if (!isMockMode()) return redesignWebsite(url)
+
   if (options.simulateFailure) {
     // Fail part-way through so the failed stage is visible.
     await sleep(STAGE_DURATION_MS * 2 + 400)
@@ -48,7 +53,7 @@ async function run(
   }
 
   const [result] = await Promise.all([
-    mockRedesign(url),
+    redesignWebsite(url),
     sleep(REDESIGN_STAGES.length * STAGE_DURATION_MS),
   ])
   return result

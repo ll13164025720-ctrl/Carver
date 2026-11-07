@@ -117,11 +117,11 @@ export function WebsiteRenderer({ design, className }: WebsiteRendererProps) {
           businessName={design.businessName}
           content={design.navigation}
         />
-        <main>
+        <div>
           {visibleSections.map((section) => (
             <Fragment key={section.id}>{renderSection(section, design)}</Fragment>
           ))}
-        </main>
+        </div>
         <WebsiteFooter businessName={design.businessName} content={design.footer} />
       </div>
     </RendererProvider>
