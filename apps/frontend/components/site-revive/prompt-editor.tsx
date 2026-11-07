@@ -78,9 +78,9 @@ export function PromptEditor({
     >
       <label
         htmlFor={inputId}
-        className="mb-2 flex items-center gap-2 text-sm font-medium text-white"
+        className="mb-3 flex items-center gap-2 text-sm font-medium text-cream"
       >
-        <Sparkles className="size-4 text-violet-400" aria-hidden />
+        <Sparkles className="size-4 text-gold" aria-hidden />
         Edit the redesign with a prompt
       </label>
 
@@ -101,13 +101,13 @@ export function PromptEditor({
             setValue(event.target.value)
             setFeedback(null)
           }}
-          className="h-11 rounded-xl border-white/20 bg-white/10 px-4 text-base text-white placeholder:text-white/50 sm:flex-1 dark:bg-white/10"
+          className="cv-input sm:flex-1"
         />
         <Button
           type="submit"
           size="lg"
           disabled={isLoading}
-          className="h-11 rounded-xl bg-violet-600 px-6 text-base font-semibold text-white shadow-lg shadow-violet-600/30 hover:bg-violet-500 focus-visible:border-violet-300 focus-visible:ring-violet-400/50"
+          className="cv-btn cv-btn-primary"
         >
           {isLoading ? <LoaderCircle className="animate-spin" aria-hidden /> : null}
           {isLoading ? "Applying..." : "Apply Changes"}
@@ -117,15 +117,15 @@ export function PromptEditor({
       <div id={messageId} className="mt-3 min-h-6 text-sm">
         {feedback ? (
           feedback.ok ? (
-            <p role="status" className="flex items-start gap-2 text-white/80">
+            <p role="status" className="flex items-start gap-2 text-cream/85">
               <CircleCheck
-                className="mt-0.5 size-4 shrink-0 text-emerald-400"
+                className="mt-0.5 size-4 shrink-0 text-gold"
                 aria-hidden
               />
               {feedback.message}
             </p>
           ) : (
-            <p role="alert" className="flex items-start gap-2 text-red-400">
+            <p role="alert" className="flex items-start gap-2 text-(--cv-error)">
               <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
               {feedback.message}
             </p>
@@ -135,14 +135,14 @@ export function PromptEditor({
 
       {examples.length > 0 ? (
         <div className="mt-1 flex flex-wrap items-center gap-2">
-          <span className="text-xs text-white/50">Try:</span>
+          <span className="text-xs text-cream/65">Try:</span>
           {examples.map((example) => (
             <button
               key={example}
               type="button"
               disabled={isLoading}
               onClick={() => chooseExample(example)}
-              className="rounded-full border border-white/15 px-3 py-1 text-xs text-white/70 transition-colors outline-none hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-violet-400/60 disabled:opacity-50"
+              className="rounded-md border border-cream/20 px-3 py-1.5 text-xs text-cream/75 transition-colors outline-none hover:border-cream/45 hover:bg-cream/[0.08] hover:text-cream focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gold disabled:opacity-50"
             >
               {example}
             </button>

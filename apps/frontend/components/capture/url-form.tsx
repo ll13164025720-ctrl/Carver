@@ -97,13 +97,13 @@ export function UrlForm({
             setError(null)
             setAccepted(null)
           }}
-          className="h-12 rounded-xl border-white/20 bg-white/10 px-4 text-base text-white placeholder:text-white/50 sm:flex-1 dark:bg-white/10"
+          className="cv-input h-14 sm:flex-1"
         />
         <Button
           type="submit"
           size="lg"
           disabled={isSubmitting}
-          className="h-12 rounded-xl bg-violet-600 px-6 text-base font-semibold text-white shadow-lg shadow-violet-600/30 hover:bg-violet-500 focus-visible:border-violet-300 focus-visible:ring-violet-400/50"
+          className="cv-btn cv-btn-primary h-14 px-7"
         >
           {isSubmitting ? (
             <LoaderCircle className="animate-spin" aria-hidden />
@@ -113,17 +113,17 @@ export function UrlForm({
         </Button>
       </div>
 
-      <div id={messageId} className="mt-3 min-h-6 text-left text-sm">
+      <div id={messageId} className="mt-4 min-h-6 text-left text-sm">
         {error ? (
-          <p role="alert" className="flex items-start gap-2 text-red-400">
+          <p role="alert" className="flex items-start gap-2 text-(--cv-error)">
             <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
             {error}
           </p>
         ) : null}
         {accepted ? (
-          <p role="status" className="flex items-start gap-2 text-white/80">
+          <p role="status" className="flex items-start gap-2 text-cream/80">
             <CircleCheck
-              className="mt-0.5 size-4 shrink-0 text-violet-400"
+              className="mt-0.5 size-4 shrink-0 text-gold"
               aria-hidden
             />
             Got it: {accepted.hostname} is ready to be revived. The redesign
