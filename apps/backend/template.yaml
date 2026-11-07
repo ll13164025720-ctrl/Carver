@@ -1,0 +1,89 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: SiteRevive MVP API - Bedrock website blueprint generation
+
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Timeout: 45
+    MemorySize: 512
+    Architectures:
+      - arm64
+
+Resources:
+  SiteReviveHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: "$default"
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowHeaders:
+          - content-type
+          - authorization
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+
+  SiteReviveApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../..
+      Handler: apps/backend/src/handler.handler
+      Environment:
+        Variables:
+          BEDROCK_MODEL_ID: us.amazon.nova-2-lite-v1:0
+          # SAM local runs the Lambda in Docker; host.docker.internal reaches
+          # the Playwright worker running on the developer's Mac.
+          CAPTURE_WORKER_URL: http://host.docker.internal:3002/capture
+          CAPTURE_WORKER_PUBLIC_URL: http://localhost:3002
+      Policies:
+        # Hackathon MVP: broad resource scope is used because inference profiles
+        # can route to foundation models in multiple US regions. Narrow this
+        # to approved inference-profile/model ARNs before production.
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource: "*"
+      Events:
+        Health:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SiteReviveHttpApi
+            Path: /health
+            Method: GET
+        CaptureWebsite:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SiteReviveHttpApi
+            Path: /api/captures
+            Method: POST
+        EditBlueprint:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SiteReviveHttpApi
+            Path: /api/blueprints/edit
+            Method: POST
+        GenerateBlueprint:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SiteReviveHttpApi
+            Path: /api/blueprints/generate
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        EntryPoints:
+          - apps/backend/src/handler.ts
+        Bundle: true
+        Minify: false
+        Sourcemap: true
+        Target: es2022
+        Format: cjs
+
+Outputs:
+  SiteReviveApiUrl:
+    Description: SiteRevive HTTP API endpoint
+    Value: !Sub "https://${SiteReviveHttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}"
