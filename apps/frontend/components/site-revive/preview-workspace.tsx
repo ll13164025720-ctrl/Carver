@@ -15,12 +15,13 @@ import {
 } from "@/components/site-revive/prompt-editor"
 import { ProcessingFallback } from "@/components/site-revive/processing-fallback"
 import { WebsiteRenderer } from "@/components/site-revive/website-renderer"
-import { DEMO_EDIT_COMMANDS, editWebsiteDesign } from "@/lib/design-editor"
+import { DEMO_EDIT_COMMANDS } from "@/lib/design-editor"
 import {
   parseStoredProject,
   readStoredProjectJson,
   type StoredProject,
 } from "@/lib/redesign-session"
+import { describeApiError, editWebsite, isMockMode } from "@/lib/site-revive-api"
 import { cn } from "@/lib/utils"
 import type { WebsiteDesign } from "@/types/website"
 
@@ -99,10 +100,23 @@ export function PreviewWorkspace() {
   const hostname = hostnameOf(sourceUrl)
 
   async function applyPrompt(instruction: string): Promise<PromptEditFeedback> {
-    const edit = await editWebsiteDesign(design, instruction)
-    if (!edit.ok) return { ok: false, message: edit.error }
-    if (edit.changed) setEditedDesign(edit.design)
-    return { ok: true, message: edit.summary }
+    try {
+      const edit = await editWebsite({
+        projectId: result.projectId,
+        prompt: instruction,
+        currentDesign: design,
+      })
+      setEditedDesign(edit.design)
+      return { ok: true, message: edit.summary }
+    } catch (error) {
+      return {
+        ok: false,
+        message: describeApiError(
+          error,
+          "Something went wrong while applying that change. Please try again."
+        ),
+      }
+    }
   }
   const showBefore = mode === "before" || mode === "compare"
   const showAfter = mode === "after" || mode === "compare"
@@ -134,7 +148,7 @@ export function PreviewWorkspace() {
         {showBefore ? (
           <PreviewPane
             label="Before"
-            caption={`Original website (${hostname}), sample placeholder`}
+            caption={`Original website (${hostname})${isMockMode() ? ", sample placeholder" : ""}`}
             tone="before"
           >
             <DeviceFrame device={device} address={sourceUrl}>

@@ -29,17 +29,15 @@ function ContactRow({
   children: ReactNode
 }) {
   return (
-    <div className="flex items-start gap-4">
+    <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4">
       <span
         aria-hidden
-        className="flex size-11 shrink-0 items-center justify-center rounded-full bg-(--sr-on-secondary)/12"
+        className="row-span-2 flex size-11 shrink-0 items-center justify-center self-start rounded-full bg-(--sr-on-secondary)/12"
       >
         {icon}
       </span>
-      <div className="min-w-0">
-        <dt className="text-sm font-medium opacity-70">{label}</dt>
-        <dd className="mt-1 text-lg leading-7 break-words">{children}</dd>
-      </div>
+      <dt className="text-sm font-medium opacity-70">{label}</dt>
+      <dd className="mt-1 text-lg leading-7 break-words">{children}</dd>
     </div>
   )
 }

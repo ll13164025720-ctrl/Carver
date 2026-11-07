@@ -39,7 +39,7 @@ export default function Home() {
 
       <HowItWorks />
 
-      <footer className="border-t border-black/10 bg-white py-8 text-center text-sm text-black/50">
+      <footer className="border-t border-black/10 bg-white py-8 text-center text-sm text-black/60">
         SiteRevive
       </footer>
     </div>

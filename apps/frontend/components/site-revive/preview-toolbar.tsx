@@ -4,6 +4,7 @@ import Link from "next/link"
 import { ArrowLeft, Columns2, FlaskConical, Monitor, Smartphone, Sparkles, Clock } from "lucide-react"
 
 import type { Device } from "@/components/site-revive/device-frame"
+import { isMockMode } from "@/lib/site-revive-api"
 import {
   SegmentedControl,
   type SegmentedOption,
@@ -37,6 +38,7 @@ export function PreviewToolbar({
   device,
   onDeviceChange,
 }: PreviewToolbarProps) {
+  const mockMode = isMockMode()
   return (
     <div className="flex flex-col gap-6">
       <div>
@@ -52,16 +54,20 @@ export function PreviewToolbar({
           <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
             Your redesign preview
           </h1>
-          <p className="inline-flex items-center gap-2 rounded-full border border-white/15 px-3 py-1 text-xs font-medium text-white/70">
-            <FlaskConical className="size-3.5" aria-hidden />
-            Demo mode
-          </p>
+          {mockMode ? (
+            <p className="inline-flex items-center gap-2 rounded-full border border-white/15 px-3 py-1 text-xs font-medium text-white/70">
+              <FlaskConical className="size-3.5" aria-hidden />
+              Demo mode
+            </p>
+          ) : null}
         </div>
-        <p className="mt-3 max-w-2xl text-sm leading-6 text-white/50">
-          This is a sample design, not generated from {hostname}. The
-          &ldquo;before&rdquo; image is a placeholder, because demo mode
-          doesn&apos;t capture your real website.
-        </p>
+        {mockMode ? (
+          <p className="mt-3 max-w-2xl text-sm leading-6 text-white/50">
+            This is a sample design, not generated from {hostname}. The
+            &ldquo;before&rdquo; image is a placeholder, because demo mode
+            doesn&apos;t capture your real website.
+          </p>
+        ) : null}
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-4">
