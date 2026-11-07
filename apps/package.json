@@ -1,0 +1,19 @@
+{
+  "name": "siterevive",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/frontend",
+    "apps/backend",
+    "apps/capture-worker",
+    "packages/shared"
+  ],
+  "scripts": {
+    "dev:frontend": "npm run dev --workspace=@siterevive/frontend",
+    "dev:backend": "sam local start-api --template .aws-sam/build/template.yaml --port 3001",
+    "build:backend": "sam build --template-file apps/backend/template.yaml",
+    "dev:capture": "npm run dev --workspace=@siterevive/capture-worker",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  }
+}

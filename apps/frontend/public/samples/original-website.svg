@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1700" viewBox="0 0 1280 1700" role="img" aria-labelledby="t d">
+  <title id="t">Sample screenshot of an outdated website</title>
+  <desc id="d">Placeholder illustration of an old-fashioned small business website. It is not a screenshot of a real site.</desc>
+
+  <rect width="1280" height="1700" fill="#c0c0c0"/>
+  <rect x="40" y="0" width="1200" height="1700" fill="#ffffcc" stroke="#000080" stroke-width="3"/>
+
+  <!-- Header -->
+  <rect x="40" y="0" width="1200" height="170" fill="#000080"/>
+  <text x="640" y="82" text-anchor="middle" font-family="'Times New Roman', serif" font-size="56" font-weight="bold" fill="#ffff00">~*~ Welcome To Our Website!!! ~*~</text>
+  <text x="640" y="128" text-anchor="middle" font-family="'Comic Sans MS', 'Comic Sans', cursive" font-size="26" fill="#ffffff">The BEST place in town since 1998</text>
+  <rect x="40" y="170" width="1200" height="36" fill="#ff0000"/>
+  <text x="640" y="196" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#ffffff">*** NEW *** CHECK OUT OUR SPECIALS *** NEW *** CALL TODAY ***</text>
+
+  <!-- Left menu -->
+  <rect x="70" y="240" width="220" height="560" fill="#99ccff" stroke="#000080" stroke-width="2"/>
+  <g font-family="'Times New Roman', serif" font-size="26" fill="#0000ee" text-decoration="underline">
+    <text x="95" y="290" text-decoration="underline">Home</text>
+    <text x="95" y="342" text-decoration="underline">About Us</text>
+    <text x="95" y="394" text-decoration="underline">Products</text>
+    <text x="95" y="446" text-decoration="underline">Specials!!</text>
+    <text x="95" y="498" text-decoration="underline">Photo Album</text>
+    <text x="95" y="550" text-decoration="underline">Guestbook</text>
+    <text x="95" y="602" text-decoration="underline">Links</text>
+    <text x="95" y="654" text-decoration="underline">Contact Us</text>
+  </g>
+  <text x="95" y="740" font-family="'Comic Sans MS', cursive" font-size="18" fill="#800000">Page last updated</text>
+  <text x="95" y="766" font-family="'Comic Sans MS', cursive" font-size="18" fill="#800000">March 2009</text>
+
+  <!-- Main text -->
+  <g font-family="'Times New Roman', serif" fill="#000000">
+    <text x="330" y="290" font-size="34" font-weight="bold" fill="#800000">Hello and Welcome!</text>
+    <text x="330" y="340" font-size="22">We are a family owned business and we have been</text>
+    <text x="330" y="372" font-size="22">serving our community for many years. Please look</text>
+    <text x="330" y="404" font-size="22">around and let us know what you think. We hope you</text>
+    <text x="330" y="436" font-size="22">enjoy your visit to our website!!!</text>
+    <text x="330" y="500" font-size="22" font-weight="bold">Our hours are Monday through Saturday.</text>
+    <text x="330" y="532" font-size="22">Call us for more information or visit the store.</text>
+    <text x="330" y="564" font-size="22">(No phone number? Click Contact Us on the left.)</text>
+  </g>
+
+  <!-- Dated image boxes -->
+  <rect x="330" y="610" width="270" height="190" fill="#dddddd" stroke="#000000" stroke-width="4"/>
+  <text x="465" y="712" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" fill="#555555">photo1.jpg</text>
+  <rect x="640" y="610" width="270" height="190" fill="#dddddd" stroke="#000000" stroke-width="4"/>
+  <text x="775" y="712" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" fill="#555555">photo2.jpg</text>
+  <rect x="950" y="610" width="250" height="190" fill="#dddddd" stroke="#000000" stroke-width="4"/>
+  <text x="1075" y="712" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" fill="#555555">photo3.jpg</text>
+
+  <!-- Specials table -->
+  <rect x="70" y="850" width="1130" height="60" fill="#ff9900" stroke="#000000" stroke-width="2"/>
+  <text x="635" y="890" text-anchor="middle" font-family="Arial, sans-serif" font-size="28" font-weight="bold" fill="#000000">THIS WEEK'S SPECIALS</text>
+  <g stroke="#000000" stroke-width="2" fill="#ffffff">
+    <rect x="70" y="910" width="376" height="190"/>
+    <rect x="446" y="910" width="376" height="190"/>
+    <rect x="822" y="910" width="378" height="190"/>
+  </g>
+  <g font-family="'Times New Roman', serif" font-size="22" fill="#000000" text-anchor="middle">
+    <text x="258" y="1000">Special Item #1</text>
+    <text x="258" y="1034">Only $4.99!!!</text>
+    <text x="634" y="1000">Special Item #2</text>
+    <text x="634" y="1034">Only $7.99!!!</text>
+    <text x="1011" y="1000">Special Item #3</text>
+    <text x="1011" y="1034">Ask us!!!</text>
+  </g>
+
+  <!-- Blurry long text block -->
+  <g font-family="'Times New Roman', serif" font-size="20" fill="#333333">
+    <text x="70" y="1170">Our company mission is to provide quality products and services to all of our valued customers. We believe in</text>
+    <text x="70" y="1200">honesty, integrity and hard work. Thank you for choosing us. If you have any questions or comments please sign</text>
+    <text x="70" y="1230">our guestbook or send us an e-mail. We try to answer all e-mails within 3-5 business days. Thanks again!</text>
+    <text x="70" y="1290" fill="#0000ee" text-decoration="underline">Click here to see our old site</text>
+    <text x="70" y="1330" fill="#0000ee" text-decoration="underline">Click here to download our price list (Word document)</text>
+  </g>
+
+  <!-- Visitor counter -->
+  <rect x="440" y="1400" width="400" height="90" fill="#000000" stroke="#c0c0c0" stroke-width="4"/>
+  <text x="640" y="1432" text-anchor="middle" font-family="'Courier New', monospace" font-size="20" fill="#00ff00">You are visitor number</text>
+  <text x="640" y="1472" text-anchor="middle" font-family="'Courier New', monospace" font-size="34" font-weight="bold" fill="#00ff00">0 0 4 5 2 1</text>
+
+  <!-- Footer -->
+  <rect x="40" y="1560" width="1200" height="140" fill="#000080"/>
+  <text x="640" y="1612" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" fill="#ffffff">Best viewed in Internet Explorer at 800x600 resolution</text>
+  <text x="640" y="1646" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" fill="#ffffff">Copyright 2009. All rights reserved. Site design by a friend's nephew.</text>
+
+  <!-- Placeholder label so this can never be mistaken for a real capture -->
+  <g transform="translate(640 850) rotate(-24)" opacity="0.88">
+    <rect x="-330" y="-48" width="660" height="96" rx="8" fill="#7c3aed"/>
+    <text x="0" y="-6" text-anchor="middle" font-family="Arial, sans-serif" font-size="30" font-weight="bold" fill="#ffffff">SAMPLE PLACEHOLDER</text>
+    <text x="0" y="30" text-anchor="middle" font-family="Arial, sans-serif" font-size="22" fill="#ffffff">Not a screenshot of your real website</text>
+  </g>
+</svg>
