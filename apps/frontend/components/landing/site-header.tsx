@@ -4,9 +4,11 @@ import { cn } from "@/lib/utils"
 
 type SiteHeaderProps = {
   className?: string
+  /** Show the in-page "How it works" link. Only valid on the landing page. */
+  showNav?: boolean
 }
 
-export function SiteHeader({ className }: SiteHeaderProps) {
+export function SiteHeader({ className, showNav = true }: SiteHeaderProps) {
   return (
     <header
       className={cn(
@@ -28,14 +30,16 @@ export function SiteHeader({ className }: SiteHeaderProps) {
         <span className="text-lg font-semibold tracking-tight">SiteRevive</span>
       </Link>
 
-      <nav aria-label="Main">
-        <a
-          href="#how-it-works"
-          className="rounded-md text-sm font-medium text-white/70 transition-colors outline-none hover:text-white focus-visible:ring-3 focus-visible:ring-white/50"
-        >
-          How it works
-        </a>
-      </nav>
+      {showNav ? (
+        <nav aria-label="Main">
+          <a
+            href="#how-it-works"
+            className="rounded-md text-sm font-medium text-white/70 transition-colors outline-none hover:text-white focus-visible:ring-3 focus-visible:ring-white/50"
+          >
+            How it works
+          </a>
+        </nav>
+      ) : null}
     </header>
   )
 }
