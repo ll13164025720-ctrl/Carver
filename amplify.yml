@@ -1,0 +1,22 @@
+version: 1
+applications:
+  - appRoot: apps/frontend
+    frontend:
+      phases:
+        preBuild:
+          commands:
+            # Install from the repo root so npm workspaces hoist `next` correctly.
+            - cd ../..
+            - npm ci
+            - cd apps/frontend
+        build:
+          commands:
+            - npm run build
+      artifacts:
+        baseDirectory: .next
+        files:
+          - '**/*'
+      cache:
+        paths:
+          - ../../node_modules/**/*
+          - .next/cache/**/*
