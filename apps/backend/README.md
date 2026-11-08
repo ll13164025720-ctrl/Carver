@@ -24,24 +24,28 @@ Docker Desktop must be running for `sam local`.
 ## Routes
 
 - `GET /health` — API status and configured Bedrock model.
-- `POST /api/captures` — forwards a URL to the capture worker and returns extracted page data, screenshot URLs, and a preformatted `sourceContent` string for generation.
-- `POST /api/blueprints/generate` — asks Bedrock for a Website Blueprint and validates it with the shared Zod schema.
-- `POST /api/blueprints/edit` — asks Bedrock for structured section-content operations, validates them, applies them to a copy, and validates the resulting Blueprint.
+- `POST /api/captures` — forwards a URL to the capture worker, persists the capture and screenshots in private S3, and returns the project ID and extracted page data.
+- `POST /api/blueprints/generate` — prefers the persisted capture for the project, asks Bedrock for a Website Blueprint, validates it, and saves version 1.
+- `POST /api/blueprints/edit` — loads the latest saved Blueprint, asks Bedrock for structured edit operations, validates/applies them, and saves the next version.
+- `GET /api/projects/{projectId}` — returns project metadata and the latest saved Blueprint.
+- `GET /api/projects/{projectId}/versions` — returns version history, newest first.
+- `GET /api/projects/{projectId}/versions/{versionNumber}` — returns a particular saved Blueprint version.
 
 The local SAM template points to `http://host.docker.internal:3002/capture` because the Lambda emulator runs in Docker while the capture worker runs on the Mac host. The browser-facing screenshot base is `http://localhost:3002`.
 
 ## Model configuration
 
-The Python helper and TypeScript backend are configured to use
-the Amazon Bedrock inference profile:
+The Python helpers and TypeScript backend use the Amazon Bedrock US inference
+profile for Claude Sonnet 5:
 
-`us.meta.llama4-scout-17b-instruct-v1:0`
+`us.anthropic.claude-sonnet-5`
 
-Both use the Bedrock Converse API.
+The TypeScript backend reads `BEDROCK_MODEL_ID` from the SAM template (or the
+environment). Claude Sonnet 5 supports Bedrock's Converse API. It uses adaptive
+thinking by default, so the backend does not set non-default sampling
+parameters such as temperature or topP.
 
-The TypeScript backend reads its model configuration from
-`BEDROCK_MODEL_ID`, which can be changed to another inference
-profile enabled in the AWS Workshop account.
+The capture worker crawls the homepage and up to seven discovered same-origin subpages per request (eight pages total), with page-count, concurrency, and time limits. The Workshop account must have access to the model and inference profile.
 
 ## Deployment notes
 

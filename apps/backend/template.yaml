@@ -37,7 +37,7 @@ Resources:
           PROJECTS_TABLE: !Ref ProjectsTable
           VERSIONS_TABLE: !Ref BlueprintVersionsTable
           ASSETS_BUCKET: !Ref SiteReviveAssetsBucket
-          BEDROCK_MODEL_ID: us.meta.llama4-scout-17b-instruct-v1:0
+          BEDROCK_MODEL_ID: us.anthropic.claude-sonnet-5
 
           # SAM local: access the Playwright worker on the host Mac.
           CAPTURE_WORKER_URL: http://host.docker.internal:3002/capture
@@ -111,6 +111,27 @@ Resources:
             ApiId: !Ref SiteReviveHttpApi
             Path: /api/blueprints/generate
             Method: POST
+
+        GetProject:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SiteReviveHttpApi
+            Path: /api/projects/{projectId}
+            Method: GET
+
+        ListProjectVersions:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SiteReviveHttpApi
+            Path: /api/projects/{projectId}/versions
+            Method: GET
+
+        GetProjectVersion:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SiteReviveHttpApi
+            Path: /api/projects/{projectId}/versions/{versionNumber}
+            Method: GET
 
     Metadata:
       BuildMethod: esbuild

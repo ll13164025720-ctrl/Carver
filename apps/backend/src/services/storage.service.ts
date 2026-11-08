@@ -13,10 +13,13 @@ function getBucketName(): string {
 }
 
 function validateKey(key: string): void {
+  const segments = key.split("/");
   if (
     !key ||
+    key.trim() !== key ||
+    !key.startsWith("projects/") ||
     key.startsWith("/") ||
-    key.split("/").some((part) => part === "..")
+    segments.some((part) => !part || part === "." || part === "..")
   ) {
     throw new Error("Invalid S3 object key.");
   }
