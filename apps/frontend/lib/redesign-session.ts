@@ -1,17 +1,23 @@
 import { parseBlueprint, parseCapture } from "@/lib/blueprint-adapter"
+import { parseGeneratedPage } from "@/lib/generated-page"
 import { isMockMode, isWebsiteDesign, type ApiMode } from "@/lib/site-revive-api"
-import type { RedesignResult } from "@/types/website"
+import type { RedesignResult, SiteContent } from "@/types/website"
 
 /**
  * Keeps the current redesign project in sessionStorage so it survives page
  * navigation and refresh (/redesign -> /preview). sessionStorage is per tab and
  * is cleared when the tab closes, so a user's URL is not kept around.
  *
- * Besides the design, a real-backend project stores the blueprint the design
- * was built from (prompt edits send it back to the backend), the saved version
- * number it corresponds to (sent back as `baseVersion` so the backend can refuse
- * an edit made on an outdated version) and the page capture (needed to rebuild
- * the design after an edit). The sample project has none of these.
+ * This is the BROWSER's copy only: it lives in this tab, is gone when the tab
+ * closes, and is not shared between tabs. The durable copy of every version is
+ * the backend's (DynamoDB and S3); the app reads it back through
+ * `fetchLatestProject` and the version history.
+ *
+ * What is kept here: the content being shown (a generated page, or an
+ * earlier-format design with its blueprint), the saved version number it
+ * corresponds to (sent back as `baseVersion` so the backend can refuse an edit
+ * made on an outdated version), and the page capture (its address is the base
+ * for the page's relative URLs). The sample project has no version or capture.
  *
  * A project remembers the mode it was created in and is ignored in the other
  * one, so switching between "mock" and "api" can never show a sample result as
@@ -20,7 +26,8 @@ import type { RedesignResult } from "@/types/website"
  * Browser only: call these from event handlers and effects, never during render.
  */
 
-// v2: projects now carry a mode, a blueprint and a capture. v1 entries are ignored.
+// v2: projects carry a mode. (v1 entries are ignored.) The content shape changed
+// later without a new key because `restoreContent` reads both shapes.
 const STORAGE_KEY = "siterevive.project.v2"
 
 export interface StoredProject {
@@ -36,9 +43,42 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * Rebuilds `content` from validated parts. Accepts the current shape
+ * (`content`) and the shape stored before generated pages existed (`design`
+ * and `blueprint` at the top level), so a project open in a tab survives an
+ * upgrade of the app. Returns null for anything damaged.
+ */
+function restoreContent(result: Record<string, unknown>): SiteContent | null {
+  if (isRecord(result.content)) {
+    const stored = result.content
+    if (stored.kind === "page") {
+      const page = parseGeneratedPage(stored.page)
+      return page.ok ? { kind: "page", page: page.value } : null
+    }
+    if (stored.kind === "design") {
+      if (!isWebsiteDesign(stored.design)) return null
+      if (stored.blueprint === undefined) return { kind: "design", design: stored.design }
+      const blueprint = parseBlueprint(stored.blueprint)
+      return blueprint.ok
+        ? { kind: "design", design: stored.design, blueprint: blueprint.value }
+        : null
+    }
+    return null
+  }
+
+  // Earlier shape.
+  if (!isWebsiteDesign(result.design)) return null
+  if (result.blueprint === undefined) return { kind: "design", design: result.design }
+  const blueprint = parseBlueprint(result.blueprint)
+  return blueprint.ok
+    ? { kind: "design", design: result.design, blueprint: blueprint.value }
+    : null
+}
+
+/**
  * Checks parsed storage contents and rebuilds the project from validated
  * parts. Returns null for anything unusable: damaged data, another mode, or an
- * "api" project without the blueprint that editing needs.
+ * earlier-format design without the blueprint that editing needs.
  */
 function restoreProject(value: unknown): StoredProject | null {
   if (!isRecord(value)) return null
@@ -50,30 +90,25 @@ function restoreProject(value: unknown): StoredProject | null {
     !isRecord(result) ||
     typeof result.projectId !== "string" ||
     !result.projectId ||
-    typeof result.originalScreenshotUrl !== "string" ||
-    !isWebsiteDesign(result.design)
+    typeof result.originalScreenshotUrl !== "string"
   ) {
     return null
   }
 
+  const content = restoreContent(result)
+  if (!content) return null
+  if (content.kind === "design" && !content.blueprint && mode === "api") return null
+
   const restored: RedesignResult = {
     projectId: result.projectId,
     originalScreenshotUrl: result.originalScreenshotUrl,
-    design: result.design,
+    content,
   }
 
   if (result.versionNumber !== undefined) {
     const version = result.versionNumber
     if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 1) return null
     restored.versionNumber = version
-  }
-
-  if (result.blueprint !== undefined) {
-    const blueprint = parseBlueprint(result.blueprint)
-    if (!blueprint.ok) return null
-    restored.blueprint = blueprint.value
-  } else if (mode === "api") {
-    return null
   }
 
   if (result.capture !== undefined) {

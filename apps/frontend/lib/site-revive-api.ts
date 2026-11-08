@@ -1,14 +1,11 @@
 import { adaptBlueprint, parseCapture } from "@/lib/blueprint-adapter"
 import { deriveBusinessName } from "@/lib/business-name"
 import { editWebsiteDesign } from "@/lib/design-editor"
+import { parseGeneratedPage } from "@/lib/generated-page"
 import { mockRedesign } from "@/lib/mock-site-revive"
 import { safeExternalHref } from "@/lib/website-render"
-import type {
-  BlueprintSection,
-  WebsiteBlueprint,
-  WebsiteCapture,
-} from "@/types/backend"
-import type { RedesignResult, WebsiteDesign } from "@/types/website"
+import type { WebsiteBlueprint, WebsiteCapture } from "@/types/backend"
+import type { GeneratedPage, RedesignResult, SiteContent, WebsiteDesign } from "@/types/website"
 
 /**
  * Typed client for the SiteRevive backend (AWS Lambda API in apps/backend plus
@@ -46,15 +43,21 @@ import type { RedesignResult, WebsiteDesign } from "@/types/website"
  *     request   { sourceUrl }
  *     200 body  { ok: true, projectId, capture, sourceContent, screenshotKeys }
  *   POST /api/blueprints/generate
- *     request   { projectId?, businessName, businessType?, description?, sourceUrl?, sourceContent? }
- *     200 body  { ok: true, projectId, versionNumber, blueprint }
- *   POST /api/blueprints/edit
- *     request   { projectId?, baseVersion?, blueprint, prompt }
- *     200 body  { ok: true, projectId?, versionNumber?, blueprint, operations }
- *   GET  /api/projects/{projectId}                      latest blueprint
+ *     request   { projectId?, businessName, businessType?, description?, sourceUrl?,
+ *                 sourceContent?, redesignPrompt? }
+ *     200 body  { ok: true, projectId, versionNumber, website: { html, css, javascript } }
+ *   POST /api/blueprints/edit   (also /api/websites/edit)
+ *     request   { projectId, baseVersion, prompt }      the backend loads the saved page
+ *     200 body  { ok: true, projectId, versionNumber, website: { html, css, javascript } }
+ *   GET  /api/projects/{projectId}                      { project, website }
  *   GET  /api/projects/{projectId}/versions             history list
- *   GET  /api/projects/{projectId}/versions/{number}    one saved blueprint
+ *   GET  /api/projects/{projectId}/versions/{number}    { version, website }
  *   Errors      non-2xx with { error: "<message>", details?, latestVersion? }
+ *
+ * Earlier backends returned a fixed-structure `blueprint` instead of `website`,
+ * and edited it with { blueprint, prompt } (stateless). Both are still understood:
+ * `normalizeResult` turns either into a SiteContent, and the legacy edit request
+ * is still sent for results that hold a blueprint.
  *
  * One redesign is one project. The capture creates it, generate adds version 1
  * to it, and every edit adds the next version. Edits send `baseVersion`, and
@@ -86,13 +89,22 @@ export interface GenerateBlueprintRequest {
   description?: string
   sourceUrl?: string
   sourceContent?: string
+  /** The owner's design direction ("How would you like to redesign this website?"). Optional. */
+  redesignPrompt?: string
 }
 
-/** Body of POST /api/blueprints/edit. */
+/** Body of POST /api/blueprints/edit for a generated page (the current format). */
+export interface EditWebsiteRequest {
+  projectId: string
+  /** The version this edit is based on. The backend refuses it with 409 if a newer one exists. */
+  baseVersion: number
+  prompt: string
+}
+
+/** Body of POST /api/blueprints/edit for an earlier-format blueprint (stateless). */
 export interface EditBlueprintRequest {
-  /** With `baseVersion`, makes the backend load, check and save versions for this project. */
+  /** Only understood by backends that saved blueprint versions. Ignored by the current one. */
   projectId?: string
-  /** The version this edit is based on. The backend refuses it if a newer one exists. */
   baseVersion?: number
   blueprint: WebsiteBlueprint
   prompt: string
@@ -104,26 +116,24 @@ export type RedesignResponse = RedesignResult
 export interface EditInput {
   projectId: string
   prompt: string
-  /** The design currently shown. Used to detect edits that change nothing visible. */
-  currentDesign: WebsiteDesign
-  /** The blueprint behind `currentDesign`. Required in "api" mode, unused in "mock" mode. */
-  blueprint?: WebsiteBlueprint
-  /** The saved version of `blueprint`. When set, the edit is saved as the next version. */
+  /** What is shown now: a generated page, or an earlier-format design with its blueprint. */
+  content: SiteContent
+  /** The saved version of `content`. Required to edit a generated page. */
   versionNumber?: number
   /** The capture stored with the project. Optional. */
   capture?: WebsiteCapture
 }
 
-/** What `editWebsite` hands to the UI. */
+/** What `editWebsite` hands to the UI. The result of an edit has the same kind as its input. */
 export interface EditOutcome {
-  design: WebsiteDesign
-  /** The updated blueprint to store for the next edit. Absent in mock mode. */
-  blueprint?: WebsiteBlueprint
+  /** The updated content to show and store. Only ever returned when the edit really succeeded. */
+  content: SiteContent
   /** The version the backend saved this edit as. Absent in mock mode or without versioning. */
   versionNumber?: number
   /**
    * False when nothing visible changed: in mock mode the design already matched,
-   * in api mode the backend only changed details the preview does not show.
+   * in api mode the AI returned the same page, or only changed details a
+   * blueprint design does not show.
    */
   changed: boolean
   /** Plain-language description of what happened, safe to show to the user. */
@@ -145,24 +155,31 @@ export interface RequestOptions {
 export interface RedesignOptions extends RequestOptions {
   /** Called when the redesign moves to a new stage. Not called in mock mode. */
   onStage?: (stage: RedesignStage) => void
+  /** The owner's design direction. Sent to the model with the first generation. Optional. */
+  instruction?: string
 }
 
 /** Prompt length limit. Matches the limit the existing editor already enforces. */
 export const MAX_PROMPT_LENGTH = 300
-/** Opening the page, extracting content and taking two screenshots. */
+/** The backend accepts up to 1000 characters of design direction (GenerateBlueprintRequestSchema). */
+export const MAX_INSTRUCTION_LENGTH = 1000 // keep equal to lib/redesign-draft.ts
+/** Opening the page and up to seven more, extracting content and taking two screenshots. */
 export const CAPTURE_TIMEOUT_MS = 45_000
-/** One Bedrock call that writes a whole blueprint. */
-export const GENERATE_TIMEOUT_MS = 60_000
-/** One Bedrock call that returns a few edit operations. */
-export const EDIT_TIMEOUT_MS = 45_000
+/**
+ * One Bedrock call that writes a whole page. Measured with Claude Sonnet 5: 50
+ * to 120 seconds (longer with a detailed design direction), so allow five minutes.
+ */
+export const GENERATE_TIMEOUT_MS = 300_000
+/** One Bedrock call that rewrites the whole page. Similar to generating it. */
+export const EDIT_TIMEOUT_MS = 300_000
 /** Reading saved data: no model call, so it should be quick. */
 export const HISTORY_TIMEOUT_MS = 20_000
 
-/** Example instructions the real backend can follow (text edits inside sections). */
+/** Example instructions for the real backend. The AI rewrites the page, so most requests work. */
 export const API_EDIT_EXAMPLES: readonly string[] = [
-  "Change the hero headline to Welcome to Our Cafe",
-  "Change the hero button text to Contact Us",
-  "Rewrite the about text to be shorter",
+  "Change the main headline to Welcome to Our Cafe",
+  "Make the colors warmer",
+  "Add a short section about our story",
 ]
 
 // ---------------------------------------------------------------------------
@@ -396,6 +413,51 @@ export function isWebsiteDesign(value: unknown): value is WebsiteDesign {
   )
 }
 
+/**
+ * Turns the answer of generate, edit or a saved-project read into the one
+ * SiteContent the app works with, whichever format the backend used:
+ *
+ * - `website: { html, css, javascript }` is a generated page (current format).
+ * - `blueprint` is a fixed-structure blueprint (earlier format), converted by
+ *   the blueprint adapter. `capture` fills what a blueprint has no field for.
+ *
+ * If both are present the page wins. Anything else, or a value that fails
+ * validation, is an error with a reason for developers (never shown to users).
+ */
+export function normalizeResult(
+  body: unknown,
+  capture?: WebsiteCapture
+): { ok: true; content: SiteContent } | { ok: false; error: string } {
+  if (!isObj(body)) return { ok: false, error: "The answer is not an object." }
+
+  if (body.website !== undefined) {
+    const page = parseGeneratedPage(body.website)
+    return page.ok
+      ? { ok: true, content: { kind: "page", page: page.value } }
+      : { ok: false, error: page.error }
+  }
+
+  if (body.blueprint !== undefined && body.blueprint !== null) {
+    const adapted = adaptBlueprint(body.blueprint, capture)
+    return adapted.ok
+      ? {
+          ok: true,
+          content: {
+            kind: "design",
+            design: adapted.value.design,
+            blueprint: adapted.value.blueprint,
+          },
+        }
+      : { ok: false, error: adapted.error }
+  }
+
+  return { ok: false, error: "The answer has neither a website nor a blueprint." }
+}
+
+function samePage(a: GeneratedPage, b: GeneratedPage): boolean {
+  return a.html === b.html && a.css === b.css && a.javascript === b.javascript
+}
+
 function invalidResponse(what: string, detail?: string): SiteReviveApiError {
   warnInDevelopment(`The backend sent an unreadable ${what}${detail ? `: ${detail}` : "."}`)
   return new SiteReviveApiError(
@@ -446,12 +508,16 @@ const TEXT = {
   captureTimeout: "That website took too long to load, so we stopped waiting. Please try again.",
   generateFailed: "The AI couldn't create a design this time. Please try again.",
   generateRejected: "The CARVER service could not use that website's content. Please try again.",
+  outputRejected:
+    "The AI wrote a page that didn't pass our safety checks, so it was not used. Please try again.",
+  outputTooLong:
+    "The AI ran out of space while writing the page. Please try again, or ask for something simpler.",
   generateTimeout: "The AI took too long to answer, so we stopped waiting. Please try again.",
   editFailed:
     "We couldn't apply that change. Try rephrasing it, for example: Change the hero headline to Welcome.",
   editRejected: "That instruction couldn't be accepted. Try a shorter or clearer one.",
   editConflict:
-    "This design was changed in another window, so your edit was not applied. We loaded the latest version. Please enter your change again.",
+    "This website was changed in another window, so your edit was not applied. Load the latest version, then enter your change again.",
   projectGone: "This project is no longer available. Start a new redesign.",
   historyFailed: "We couldn't load the version history. Please try again.",
   editTimeout: "The AI took too long to answer, so we stopped waiting. Please try again.",
@@ -533,6 +599,15 @@ function httpError(status: number, text: string, operation: Operation): SiteRevi
   }
 
   const retryable = status >= 500
+  if (operation === "generate" || operation === "edit") {
+    // The backend words these itself; show our own plain text for them.
+    if (/did not pass validation/i.test(detail ?? "")) {
+      return new SiteReviveApiError("server", TEXT.outputRejected, { ...base, retryable })
+    }
+    if (/ran out of space/i.test(detail ?? "")) {
+      return new SiteReviveApiError("server", TEXT.outputTooLong, { ...base, retryable })
+    }
+  }
   if (operation === "capture") {
     const message = detail && SHOWABLE_CAPTURE_FAILURE.test(detail) ? detail : TEXT.captureFailed
     return new SiteReviveApiError("server", message, { ...base, retryable })
@@ -689,7 +764,7 @@ function validVersionNumber(value: unknown): number | undefined {
 
 const MAX_SOURCE_URL_LENGTH = 2048
 const MAX_DESCRIPTION_LENGTH = 1000
-const MAX_SOURCE_CONTENT_LENGTH = 12_000
+const MAX_SOURCE_CONTENT_LENGTH = 28_000
 
 async function captureWebsite(
   config: Extract<ApiConfig, { mode: "api" }>,
@@ -754,9 +829,10 @@ function compactCapture(capture: WebsiteCapture): WebsiteCapture {
  * Mock mode returns the sample cafe design immediately. The artificial pacing
  * that makes the demo feel real lives in `lib/redesign-job.ts`, not here.
  *
- * Api mode makes two requests: capture the page, then generate a blueprint
- * from the captured content, and converts the blueprint to a design. A failed
- * request rejects. It never returns sample data.
+ * Api mode makes two requests: capture the page, then ask the model to write
+ * the new site (optionally following `options.instruction`). The answer is
+ * validated and normalized (see normalizeResult). A failed request rejects. It
+ * never returns sample data.
  *
  * Rejects with SiteReviveApiError.
  */
@@ -780,10 +856,12 @@ export async function redesignWebsite(
   // 2. Generate. The business name is a guess from the page title or domain.
   options.onStage?.("designing")
   const description = capture.description.trim().slice(0, MAX_DESCRIPTION_LENGTH)
+  const instruction = (options.instruction ?? "").trim().slice(0, MAX_INSTRUCTION_LENGTH)
   const request: GenerateBlueprintRequest = {
     // Keeps the redesign under the project the capture created.
     ...(projectId ? { projectId } : {}),
     businessName: deriveBusinessName(capture.title, capture.finalUrl || url),
+    ...(instruction ? { redesignPrompt: instruction } : {}),
     ...(description ? { description } : {}),
     ...(url.length <= MAX_SOURCE_URL_LENGTH ? { sourceUrl: url } : {}),
     ...(sourceContent ? { sourceContent: sourceContent.slice(0, MAX_SOURCE_CONTENT_LENGTH) } : {}),
@@ -807,9 +885,9 @@ export async function redesignWebsite(
     throw error
   }
 
-  // 3. Convert. The adapter validates the blueprint and fills any gaps.
-  const adapted = adaptBlueprint(isObj(body) ? body.blueprint : undefined, capture)
-  if (!adapted.ok) throw invalidResponse("website design", adapted.error)
+  // 3. Normalize. Validates the page (or converts a blueprint) and rejects anything else.
+  const normalized = normalizeResult(body, capture)
+  if (!normalized.ok) throw invalidResponse("website", normalized.error)
 
   captureCache.delete(url)
   // Prefer the project id the backend confirms; fall back to the one from the
@@ -819,9 +897,8 @@ export async function redesignWebsite(
   return {
     projectId: savedProjectId ?? projectId ?? capture.captureId,
     originalScreenshotUrl: screenshotUrlFor(capture, config),
-    design: adapted.value.design,
+    content: normalized.content,
     ...(versionNumber ? { versionNumber } : {}),
-    blueprint: adapted.value.blueprint,
     capture: compactCapture(capture),
   }
 }
@@ -841,12 +918,13 @@ function fieldWords(field: string): string {
 }
 
 /**
- * Describes what the backend changed ("Updated the hero headline."), using only
- * section types and field names, never the AI's new values, which are untrusted.
+ * Describes what a blueprint edit changed ("Updated the hero headline."), using
+ * only section types and field names, never the AI's new values, which are
+ * untrusted.
  */
 function describeOperations(
   operations: unknown,
-  sections: readonly BlueprintSection[]
+  sections: readonly { id: string; type: string }[]
 ): string {
   const parts: string[] = []
   for (const operation of Array.isArray(operations) ? operations : []) {
@@ -867,12 +945,23 @@ function describeOperations(
 const NOT_VISIBLE_SUMMARY =
   "The AI changed details that this preview doesn't show, so nothing looks different. Try asking for a visible change, such as the headline or a paragraph."
 
+const SAME_PAGE_SUMMARY =
+  "The AI returned the same page, so nothing looks different. Try describing the change in a different way."
+
+const MISSING_DATA = "This project can't be edited because its saved data is missing. Start a new redesign."
+
 /**
- * Applies a natural-language edit to a project's design.
+ * Applies a natural-language edit.
  *
- * Mock mode edits the design locally. Api mode sends the stored blueprint and
- * the instruction to /api/blueprints/edit, then converts the blueprint it gets
- * back. Rejects with SiteReviveApiError.
+ * - Mock mode edits the sample design locally.
+ * - A generated page is sent as { projectId, baseVersion, prompt }: the backend
+ *   loads the saved page, has the model rewrite it, saves the next version and
+ *   returns the full new page. A newer saved version makes it answer 409.
+ * - An earlier-format design is sent with its blueprint (stateless).
+ *
+ * The returned content is exactly what the backend returned and was validated.
+ * On any failure this rejects and the caller keeps what it already shows.
+ * Rejects with SiteReviveApiError.
  */
 export async function editWebsite(
   input: EditInput,
@@ -892,26 +981,82 @@ export async function editWebsite(
   }
 
   if (config.mode === "mock") {
-    const result = await editWebsiteDesign(input.currentDesign, prompt)
+    if (input.content.kind !== "design") {
+      throw new SiteReviveApiError("config", "Demo mode can only edit the sample design.")
+    }
+    const result = await editWebsiteDesign(input.content.design, prompt)
     if (!result.ok) throw new SiteReviveApiError("rejected", result.error)
-    return { design: result.design, changed: result.changed, summary: result.summary }
+    return {
+      content: { kind: "design", design: result.design },
+      changed: result.changed,
+      summary: result.summary,
+    }
   }
 
-  if (!input.blueprint) {
-    throw new SiteReviveApiError(
-      "not_found",
-      "This project can't be edited because its saved data is missing. Start a new redesign."
-    )
+  return input.content.kind === "page"
+    ? editGeneratedPage(config, input, input.content.page, prompt, options)
+    : editBlueprintDesign(config, input, input.content, prompt, options)
+}
+
+async function editGeneratedPage(
+  config: Extract<ApiConfig, { mode: "api" }>,
+  input: EditInput,
+  current: GeneratedPage,
+  prompt: string,
+  options: RequestOptions
+): Promise<EditOutcome> {
+  const projectId = validProjectId(input.projectId)
+  if (!projectId || input.versionNumber === undefined) {
+    throw new SiteReviveApiError("not_found", MISSING_DATA)
   }
+
+  const request: EditWebsiteRequest = { projectId, baseVersion: input.versionNumber, prompt }
+  const body = await requestJson(
+    "POST",
+    config.baseUrl,
+    "/api/blueprints/edit",
+    request,
+    "edit",
+    options.timeoutMs ?? EDIT_TIMEOUT_MS,
+    options.signal
+  )
+
+  const normalized = normalizeResult(body, input.capture)
+  if (!normalized.ok || normalized.content.kind !== "page") {
+    throw invalidResponse("website update", normalized.ok ? "the answer is not a page" : normalized.error)
+  }
+  // Without the new version number the next edit would be based on the wrong
+  // version. Treat it as unreadable rather than guess.
+  const versionNumber = isObj(body) ? validVersionNumber(body.versionNumber) : undefined
+  if (versionNumber === undefined) {
+    throw invalidResponse("website update", "the answer has no version number")
+  }
+
+  const changed = !samePage(current, normalized.content.page)
+  return {
+    content: normalized.content,
+    versionNumber,
+    changed,
+    summary: changed ? "Updated your website." : SAME_PAGE_SUMMARY,
+  }
+}
+
+async function editBlueprintDesign(
+  config: Extract<ApiConfig, { mode: "api" }>,
+  input: EditInput,
+  current: Extract<SiteContent, { kind: "design" }>,
+  prompt: string,
+  options: RequestOptions
+): Promise<EditOutcome> {
+  if (!current.blueprint) throw new SiteReviveApiError("not_found", MISSING_DATA)
 
   // Explicit fields: the design and capture must never reach the network.
-  // projectId + baseVersion make the backend save this edit as the next version
-  // and refuse it if the project has moved on. Both are sent together, only
-  // when this project's versions are known (otherwise the edit is stateless).
+  // projectId + baseVersion are only understood by backends that saved
+  // blueprint versions; the current backend ignores them for this request.
   const versioned = validProjectId(input.projectId) !== undefined && input.versionNumber !== undefined
   const request: EditBlueprintRequest = {
     ...(versioned ? { projectId: input.projectId, baseVersion: input.versionNumber } : {}),
-    blueprint: input.blueprint,
+    blueprint: current.blueprint,
     prompt,
   }
   const body = await requestJson(
@@ -924,19 +1069,20 @@ export async function editWebsite(
     options.signal
   )
 
-  const adapted = adaptBlueprint(isObj(body) ? body.blueprint : undefined, input.capture)
-  if (!adapted.ok) throw invalidResponse("design update", adapted.error)
+  const normalized = normalizeResult(isObj(body) ? { blueprint: body.blueprint } : body, input.capture)
+  if (!normalized.ok || normalized.content.kind !== "design") {
+    throw invalidResponse("design update", normalized.ok ? "the answer is not a design" : normalized.error)
+  }
 
-  const { design, blueprint } = adapted.value
-  const changed = JSON.stringify(design) !== JSON.stringify(input.currentDesign)
+  const { design, blueprint } = normalized.content
+  const changed = JSON.stringify(design) !== JSON.stringify(current.design)
   const savedVersion = versioned && isObj(body) ? validVersionNumber(body.versionNumber) : undefined
   return {
-    design,
-    blueprint,
+    content: normalized.content,
     ...(savedVersion ? { versionNumber: savedVersion } : {}),
     changed,
     summary: changed
-      ? describeOperations(isObj(body) ? body.operations : undefined, blueprint.sections)
+      ? describeOperations(isObj(body) ? body.operations : undefined, blueprint?.sections ?? [])
       : NOT_VISIBLE_SUMMARY,
   }
 }
@@ -947,8 +1093,7 @@ export async function editWebsite(
 
 /** A project's state as saved by the backend. */
 export interface SavedProject {
-  design: WebsiteDesign
-  blueprint: WebsiteBlueprint
+  content: SiteContent
   versionNumber: number
 }
 
@@ -996,11 +1141,11 @@ export async function fetchLatestProject(
   )
   const versionNumber =
     isObj(body) && isObj(body.project) ? validVersionNumber(body.project.latestVersion) : undefined
-  const adapted = adaptBlueprint(isObj(body) ? body.blueprint : undefined, capture)
-  if (!versionNumber || !adapted.ok) {
-    throw invalidResponse("saved project", adapted.ok ? "no version number" : adapted.error)
+  const normalized = normalizeResult(body, capture)
+  if (!versionNumber || !normalized.ok) {
+    throw invalidResponse("saved project", normalized.ok ? "no version number" : normalized.error)
   }
-  return { design: adapted.value.design, blueprint: adapted.value.blueprint, versionNumber }
+  return { content: normalized.content, versionNumber }
 }
 
 /** The project's versions, newest first. */
@@ -1046,7 +1191,7 @@ export async function fetchVersion(
     "GET", config.baseUrl, `${projectPath(projectId)}/versions/${versionNumber}`, undefined,
     "history", options.timeoutMs ?? HISTORY_TIMEOUT_MS, options.signal
   )
-  const adapted = adaptBlueprint(isObj(body) ? body.blueprint : undefined, capture)
-  if (!adapted.ok) throw invalidResponse("saved version", adapted.error)
-  return { design: adapted.value.design, blueprint: adapted.value.blueprint, versionNumber }
+  const normalized = normalizeResult(body, capture)
+  if (!normalized.ok) throw invalidResponse("saved version", normalized.error)
+  return { content: normalized.content, versionNumber }
 }

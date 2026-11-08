@@ -17,6 +17,7 @@ import {
   type RedesignStage,
 } from "@/lib/site-revive-api"
 import type { WebsiteBlueprint, WebsiteCapture } from "@/types/backend"
+import type { SiteContent } from "@/types/website"
 
 /**
  * Tests the API client against a stubbed `fetch`. Nothing here touches a
@@ -162,6 +163,12 @@ const GENERATE_REPLY = (blueprint: unknown = makeBlueprint()): Reply => ({
 const happyBackend: Handler = ({ path }) =>
   path === "/api/captures" ? CAPTURE_REPLY() : GENERATE_REPLY()
 
+/** A result's content, narrowed to the earlier "design" format (these tests use blueprints). */
+function designOf(content: SiteContent): Extract<SiteContent, { kind: "design" }> {
+  assert.equal(content.kind, "design")
+  return content as Extract<SiteContent, { kind: "design" }>
+}
+
 async function rejection(promise: Promise<unknown>): Promise<SiteReviveApiError> {
   try {
     await promise
@@ -267,29 +274,28 @@ describe("mock mode", () => {
   it("returns the sample redesign without any request", async () => {
     const result = await redesignWebsite(SITE)
     assert.equal(calls.length, 0)
-    assert.ok(isWebsiteDesign(result.design))
-    assert.equal(result.blueprint, undefined)
+    const content = designOf(result.content)
+    assert.ok(isWebsiteDesign(content.design))
+    assert.equal(content.blueprint, undefined)
     assert.equal(result.capture, undefined)
   })
 
   it("still edits locally without any request", async () => {
-    const { design } = await redesignWebsite(SITE)
+    const { content } = await redesignWebsite(SITE)
     const outcome = await editWebsite({
       projectId: "p",
       prompt: "Change the hero title to Welcome to Our Cafe",
-      currentDesign: design,
+      content,
     })
     assert.equal(calls.length, 0)
-    assert.equal(outcome.design.hero.headline, "Welcome to Our Cafe")
+    assert.equal(designOf(outcome.content).design.hero.headline, "Welcome to Our Cafe")
     assert.equal(outcome.changed, true)
-    assert.equal(outcome.blueprint, undefined)
+    assert.equal(designOf(outcome.content).blueprint, undefined)
   })
 
   it("rejects an instruction the sample editor does not know", async () => {
-    const { design } = await redesignWebsite(SITE)
-    const error = await rejection(
-      editWebsite({ projectId: "p", prompt: "Make it pop", currentDesign: design })
-    )
+    const { content } = await redesignWebsite(SITE)
+    const error = await rejection(editWebsite({ projectId: "p", prompt: "Make it pop", content }))
     assert.equal(error.code, "rejected")
   })
 })
@@ -361,17 +367,18 @@ describe("redesignWebsite (api mode)", () => {
 
     assert.equal(result.projectId, WORKER_ID)
     assert.equal(result.originalScreenshotUrl, makeCapture().screenshots.desktop)
-    assert.ok(isWebsiteDesign(result.design))
-    assert.equal(result.design.businessName, "Joe's Café")
-    assert.equal(result.design.hero.headline, "Coffee, made slow")
-    assert.deepEqual(result.blueprint, makeBlueprint())
+    const content = designOf(result.content)
+    assert.ok(isWebsiteDesign(content.design))
+    assert.equal(content.design.businessName, "Joe's Café")
+    assert.equal(content.design.hero.headline, "Coffee, made slow")
+    assert.deepEqual(content.blueprint, makeBlueprint())
     // The capture is kept for rebuilding the design, minus the bulky page text.
     assert.equal(result.capture?.captureId, WORKER_ID)
     assert.equal(result.capture?.text, "")
     assert.deepEqual(result.capture?.headings, [])
     assert.equal(result.capture?.images.length, 1)
     // The hero image came from the captured page through the adapter.
-    assert.equal(result.design.hero.image.src, "https://joescafe.com/photos/front.jpg")
+    assert.equal(content.design.hero.image.src, "https://joescafe.com/photos/front.jpg")
   })
 
   it("returns exactly what the adapter makes from the same data", async () => {
@@ -379,7 +386,7 @@ describe("redesignWebsite (api mode)", () => {
     const result = await redesignWebsite(SITE)
     const adapted = adaptBlueprint(makeBlueprint(), makeCapture())
     assert.ok(adapted.ok)
-    assert.deepEqual(result.design, adapted.value.design)
+    assert.deepEqual(designOf(result.content).design, adapted.value.design)
   })
 
   it("reports the stages in order", async () => {
@@ -406,7 +413,7 @@ describe("redesignWebsite (api mode)", () => {
       installFetch(backend)
       const result = await redesignWebsite(SITE)
       assert.equal(result.originalScreenshotUrl, "")
-      assert.ok(isWebsiteDesign(result.design))
+      assert.ok(isWebsiteDesign(designOf(result.content).design))
     })
 
     it("never uses a non-http(s) screenshot", async () => {
@@ -659,9 +666,23 @@ describe("editWebsite (api mode)", () => {
     installFetch(happyBackend)
     const result = await redesignWebsite(SITE)
     calls = []
-    assert.ok(result.blueprint)
-    return { result, blueprint: result.blueprint }
+    const content = designOf(result.content)
+    assert.ok(content.blueprint)
+    return { result, blueprint: content.blueprint, design: content.design }
   }
+
+  /** The input an edit of an earlier-format result takes. */
+  const legacyInput = (
+    base: { result: { projectId: string; capture?: WebsiteCapture }; blueprint: WebsiteBlueprint; design: Extract<SiteContent, { kind: "design" }>["design"] },
+    prompt: string,
+    extra: { versionNumber?: number } = {}
+  ) => ({
+    projectId: base.result.projectId,
+    prompt,
+    content: { kind: "design" as const, design: base.design, blueprint: base.blueprint },
+    capture: base.result.capture,
+    ...extra,
+  })
 
   function editedBlueprint(blueprint: WebsiteBlueprint, content: Record<string, unknown>): WebsiteBlueprint {
     const copy = structuredClone(blueprint)
@@ -677,16 +698,11 @@ describe("editWebsite (api mode)", () => {
   })
 
   it("sends the stored blueprint and the instruction to the edit endpoint", async () => {
-    const { result, blueprint } = await project()
+    const base = await project()
+    const { blueprint } = base
     installFetch(() => ({ json: { ok: true, blueprint, operations: [operation("headline", "x")] } }))
 
-    await editWebsite({
-      projectId: result.projectId,
-      prompt: "  Change the hero headline to Hello  ",
-      currentDesign: result.design,
-      blueprint,
-      capture: result.capture,
-    })
+    await editWebsite(legacyInput(base, "  Change the hero headline to Hello  "))
 
     assert.equal(calls.length, 1)
     assert.equal(calls[0].url, `${API}/api/blueprints/edit`)
@@ -696,7 +712,8 @@ describe("editWebsite (api mode)", () => {
   })
 
   it("returns the converted design, the new blueprint and a summary", async () => {
-    const { result, blueprint } = await project()
+    const base = await project()
+    const { blueprint } = base
     const updated = editedBlueprint(blueprint, { headline: "Welcome to Our Cafe", primaryButtonText: "Contact Us" })
     installFetch(() => ({
       json: {
@@ -706,27 +723,23 @@ describe("editWebsite (api mode)", () => {
       },
     }))
 
-    const outcome = await editWebsite({
-      projectId: result.projectId,
-      prompt: "Change the headline",
-      currentDesign: result.design,
-      blueprint,
-      capture: result.capture,
-    })
+    const outcome = await editWebsite(legacyInput(base, "Change the headline"))
+    const edited = designOf(outcome.content)
 
     assert.equal(outcome.changed, true)
-    assert.equal(outcome.design.hero.headline, "Welcome to Our Cafe")
-    assert.equal(outcome.design.hero.primaryCta.label, "Contact Us")
-    assert.deepEqual(outcome.blueprint, updated)
+    assert.equal(edited.design.hero.headline, "Welcome to Our Cafe")
+    assert.equal(edited.design.hero.primaryCta.label, "Contact Us")
+    assert.deepEqual(edited.blueprint, updated)
     assert.equal(outcome.summary, "Updated the hero headline, hero primary button text.")
     // The original is untouched, so a later edit can build on `outcome.blueprint`.
     assert.equal(blueprint.sections[1].content.headline, "Coffee, made slow")
     // Rebuilt with the capture, so the original site's photo is still the hero image.
-    assert.equal(outcome.design.hero.image.src, "https://joescafe.com/photos/front.jpg")
+    assert.equal(edited.design.hero.image.src, "https://joescafe.com/photos/front.jpg")
   })
 
   it("keeps the AI's new values out of the summary", async () => {
-    const { result, blueprint } = await project()
+    const base = await project()
+    const { blueprint } = base
     installFetch(() => ({
       json: {
         ok: true,
@@ -734,61 +747,58 @@ describe("editWebsite (api mode)", () => {
         operations: [operation("headline", "<script>alert(1)</script>"), { sectionId: 5 }, null, "x"],
       },
     }))
-    const outcome = await editWebsite({
-      projectId: "p", prompt: "x", currentDesign: result.design, blueprint, capture: result.capture,
-    })
+    const outcome = await editWebsite(legacyInput(base, "x"))
     assert.equal(outcome.summary, "Updated the hero headline.")
   })
 
   it("says so when the backend only changed things the preview does not show", async () => {
-    const { result, blueprint } = await project()
+    const base = await project()
+    const { blueprint } = base
     // `eyebrow` is part of the blueprint but is not drawn.
     installFetch(() => ({
       json: { ok: true, blueprint: editedBlueprint(blueprint, { eyebrow: "New eyebrow" }), operations: [operation("eyebrow", "New eyebrow")] },
     }))
-    const outcome = await editWebsite({
-      projectId: "p", prompt: "Change the eyebrow", currentDesign: result.design, blueprint, capture: result.capture,
-    })
+    const outcome = await editWebsite(legacyInput(base, "Change the eyebrow"))
     assert.equal(outcome.changed, false)
     assert.match(outcome.summary, /nothing looks different/i)
     // The new blueprint is still returned so the next edit builds on it.
-    assert.equal(outcome.blueprint?.sections[1].content.eyebrow, "New eyebrow")
+    assert.equal(designOf(outcome.content).blueprint?.sections[1].content.eyebrow, "New eyebrow")
   })
 
   it("falls back to a general summary when operations are missing", async () => {
-    const { result, blueprint } = await project()
-    installFetch(() => ({ json: { ok: true, blueprint: editedBlueprint(blueprint, { headline: "New" }) } }))
-    const outcome = await editWebsite({
-      projectId: "p", prompt: "x", currentDesign: result.design, blueprint, capture: result.capture,
-    })
+    const base = await project()
+    installFetch(() => ({ json: { ok: true, blueprint: editedBlueprint(base.blueprint, { headline: "New" }) } }))
+    const outcome = await editWebsite(legacyInput(base, "x"))
     assert.equal(outcome.summary, "Updated the design.")
   })
 
   it("cannot edit a project that has no stored blueprint, and sends nothing", async () => {
-    const { result } = await project()
+    const base = await project()
     installFetch(happyBackend)
     const error = await rejection(
-      editWebsite({ projectId: "p", prompt: "Change the headline", currentDesign: result.design })
+      editWebsite({
+        projectId: "p",
+        prompt: "Change the headline",
+        content: { kind: "design", design: base.design },
+      })
     )
     assert.equal(error.code, "not_found")
     assert.equal(calls.length, 0)
   })
 
   it("checks the instruction before sending anything", async () => {
-    const { result, blueprint } = await project()
+    const base = await project()
     installFetch(happyBackend)
     for (const prompt of ["", "   ", "x".repeat(301)]) {
-      const error = await rejection(
-        editWebsite({ projectId: "p", prompt, currentDesign: result.design, blueprint })
-      )
+      const error = await rejection(editWebsite(legacyInput(base, prompt)))
       assert.equal(error.code, "bad_request")
     }
     assert.equal(calls.length, 0)
   })
 
   it("rejects instead of changing anything when the backend fails", async () => {
-    const { result, blueprint } = await project()
-    const base = { projectId: "p", prompt: "Change the headline", currentDesign: result.design, blueprint }
+    const project_ = await project()
+    const base = legacyInput(project_, "Change the headline")
 
     installFetch(() => ({ status: 502, json: { error: "The AI returned invalid editing operations." } }))
     let error = await rejection(editWebsite(base))
@@ -811,11 +821,9 @@ describe("editWebsite (api mode)", () => {
   })
 
   it("times out an edit that never answers", async () => {
-    const { result, blueprint } = await project()
+    const base = await project()
     installFetch(({ init }) => hangUntilAborted(init))
-    const error = await rejection(
-      editWebsite({ projectId: "p", prompt: "x", currentDesign: result.design, blueprint }, { timeoutMs: 20 })
-    )
+    const error = await rejection(editWebsite(legacyInput(base, "x"), { timeoutMs: 20 }))
     assert.equal(error.code, "timeout")
   })
 })
@@ -954,15 +962,16 @@ describe("one redesign, one project (api mode)", () => {
   })
 })
 
-describe("saved versions: editing (api mode)", () => {
+describe("earlier-format backend: versioned blueprint edits (compatibility)", () => {
   beforeEach(setApiMode)
 
   async function savedProject() {
     installFetch(({ path }) => (path === "/api/captures" ? PROJECT_CAPTURE_REPLY() : SAVED_GENERATE_REPLY()))
     const result = await redesignWebsite(SITE)
     calls = []
-    assert.ok(result.blueprint && result.versionNumber)
-    return { result, blueprint: result.blueprint, versionNumber: result.versionNumber }
+    const content = designOf(result.content)
+    assert.ok(content.blueprint && result.versionNumber)
+    return { result, blueprint: content.blueprint, design: content.design, versionNumber: result.versionNumber }
   }
 
   const editedBlueprint = (blueprint: WebsiteBlueprint, headline: string) => {
@@ -971,67 +980,69 @@ describe("saved versions: editing (api mode)", () => {
     return copy
   }
 
+  const inputFor = (
+    state: { blueprint: WebsiteBlueprint; design: Extract<SiteContent, { kind: "design" }>["design"] },
+    extra: { versionNumber?: number; capture?: WebsiteCapture } = {}
+  ) => ({
+    projectId: PROJECT,
+    prompt: "Change the headline",
+    content: { kind: "design" as const, design: state.design, blueprint: state.blueprint },
+    ...extra,
+  })
+
   it("sends the project and the version the edit is based on", async () => {
-    const { result, blueprint, versionNumber } = await savedProject()
+    const saved = await savedProject()
     installFetch(() => ({
-      json: { ok: true, projectId: PROJECT, versionNumber: 2, blueprint: editedBlueprint(blueprint, "New"), operations: [] },
+      json: { ok: true, projectId: PROJECT, versionNumber: 2, blueprint: editedBlueprint(saved.blueprint, "New"), operations: [] },
     }))
-    const outcome = await editWebsite({
-      projectId: result.projectId, prompt: "Change the headline", currentDesign: result.design,
-      blueprint, versionNumber, capture: result.capture,
-    })
+    const outcome = await editWebsite(inputFor(saved, { versionNumber: saved.versionNumber, capture: saved.result.capture }))
 
     assert.equal(calls[0].body.projectId, PROJECT)
     assert.equal(calls[0].body.baseVersion, 1)
     assert.deepEqual(Object.keys(calls[0].body).sort(), ["baseVersion", "blueprint", "projectId", "prompt"])
     assert.equal(outcome.versionNumber, 2)
-    assert.equal(outcome.design.hero.headline, "New")
+    assert.equal(designOf(outcome.content).design.hero.headline, "New")
   })
 
   it("builds each edit on the version the previous edit produced", async () => {
-    const { result, blueprint } = await savedProject()
+    const saved = await savedProject()
     let version = 1
     installFetch(() => {
       version += 1
-      return { json: { ok: true, projectId: PROJECT, versionNumber: version, blueprint: editedBlueprint(blueprint, `v${version}`), operations: [] } }
+      return { json: { ok: true, projectId: PROJECT, versionNumber: version, blueprint: editedBlueprint(saved.blueprint, `v${version}`), operations: [] } }
     })
-    let current = { design: result.design, blueprint, versionNumber: 1 }
+    let current = { design: saved.design, blueprint: saved.blueprint, versionNumber: 1 }
     for (let i = 0; i < 3; i += 1) {
-      const outcome = await editWebsite({ projectId: PROJECT, prompt: "x", currentDesign: current.design, ...current, capture: result.capture })
-      current = { design: outcome.design, blueprint: outcome.blueprint!, versionNumber: outcome.versionNumber! }
+      const outcome = await editWebsite(inputFor(current, { versionNumber: current.versionNumber, capture: saved.result.capture }))
+      const next = designOf(outcome.content)
+      current = { design: next.design, blueprint: next.blueprint!, versionNumber: outcome.versionNumber! }
     }
     assert.deepEqual(calls.map((call) => call.body.baseVersion), [1, 2, 3])
     assert.equal(current.versionNumber, 4)
   })
 
   it("stays stateless (no project, no version) when the version is unknown", async () => {
-    const { result, blueprint } = await savedProject()
-    installFetch(() => ({ json: { ok: true, blueprint: editedBlueprint(blueprint, "New"), operations: [] } }))
-    const outcome = await editWebsite({
-      projectId: result.projectId, prompt: "x", currentDesign: result.design, blueprint, capture: result.capture,
-    })
+    const saved = await savedProject()
+    installFetch(() => ({ json: { ok: true, blueprint: editedBlueprint(saved.blueprint, "New"), operations: [] } }))
+    const outcome = await editWebsite(inputFor(saved, { capture: saved.result.capture }))
     assert.deepEqual(Object.keys(calls[0].body).sort(), ["blueprint", "prompt"])
     assert.equal(outcome.versionNumber, undefined)
   })
 
   it("never trusts a version number the backend did not send for a versioned edit", async () => {
-    const { result, blueprint, versionNumber } = await savedProject()
-    installFetch(() => ({ json: { ok: true, versionNumber: -3, blueprint: editedBlueprint(blueprint, "New"), operations: [] } }))
-    const outcome = await editWebsite({
-      projectId: PROJECT, prompt: "x", currentDesign: result.design, blueprint, versionNumber, capture: result.capture,
-    })
+    const saved = await savedProject()
+    installFetch(() => ({ json: { ok: true, versionNumber: -3, blueprint: editedBlueprint(saved.blueprint, "New"), operations: [] } }))
+    const outcome = await editWebsite(inputFor(saved, { versionNumber: saved.versionNumber, capture: saved.result.capture }))
     assert.equal(outcome.versionNumber, undefined)
   })
 
   it("reports an edit made on an outdated version as a conflict, with the newest version", async () => {
-    const { result, blueprint, versionNumber } = await savedProject()
+    const saved = await savedProject()
     installFetch(() => ({
       status: 409,
       json: { error: "This Blueprint is outdated. Load the latest version before editing.", latestVersion: 4 },
     }))
-    const error = await rejection(editWebsite({
-      projectId: PROJECT, prompt: "x", currentDesign: result.design, blueprint, versionNumber,
-    }))
+    const error = await rejection(editWebsite(inputFor(saved, { versionNumber: saved.versionNumber })))
     assert.equal(error.code, "conflict")
     assert.equal(error.latestVersion, 4)
     assert.equal(error.status, 409)
@@ -1040,11 +1051,9 @@ describe("saved versions: editing (api mode)", () => {
   })
 
   it("explains a project that no longer exists", async () => {
-    const { result, blueprint, versionNumber } = await savedProject()
+    const saved = await savedProject()
     installFetch(() => ({ status: 404, json: { error: "Project not found." } }))
-    const error = await rejection(editWebsite({
-      projectId: PROJECT, prompt: "x", currentDesign: result.design, blueprint, versionNumber,
-    }))
+    const error = await rejection(editWebsite(inputFor(saved, { versionNumber: saved.versionNumber })))
     assert.equal(error.code, "not_found")
     assert.match(error.message, /no longer available/i)
   })
@@ -1082,8 +1091,8 @@ describe("saved versions: reading (api mode)", () => {
     const saved = await fetchVersion(PROJECT, 1, makeCapture())
     assert.equal(calls[0].url, `${API}/api/projects/${PROJECT}/versions/1`)
     assert.equal(saved.versionNumber, 1)
-    assert.ok(isWebsiteDesign(saved.design))
-    assert.equal(saved.design.hero.image.src, "https://joescafe.com/photos/front.jpg")
+    assert.ok(isWebsiteDesign(designOf(saved.content).design))
+    assert.equal(designOf(saved.content).design.hero.image.src, "https://joescafe.com/photos/front.jpg")
   })
 
   it("loads the latest state of a project", async () => {
@@ -1093,7 +1102,7 @@ describe("saved versions: reading (api mode)", () => {
     const saved = await fetchLatestProject(PROJECT, makeCapture())
     assert.equal(calls[0].url, `${API}/api/projects/${PROJECT}`)
     assert.equal(saved.versionNumber, 5)
-    assert.ok(isWebsiteDesign(saved.design))
+    assert.ok(isWebsiteDesign(designOf(saved.content).design))
   })
 
   it("rejects unreadable answers", async () => {

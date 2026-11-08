@@ -206,6 +206,43 @@ export interface WebsiteDesign {
 }
 
 // ---------------------------------------------------------------------------
+// Generated pages (the AI writes the page itself)
+// ---------------------------------------------------------------------------
+
+/**
+ * A complete page written by the AI as three pieces of code, exactly as the
+ * backend returns them in `website` (see GeneratedWebsiteSchema in
+ * packages/shared). Untrusted: it is only ever shown inside a sandboxed iframe
+ * (components/site-revive/generated-page-frame.tsx), never inserted into this
+ * app's own page.
+ */
+export interface GeneratedPage {
+  /** Body markup only. No script, style, iframe, object or embed elements. */
+  html: string
+  /** Stylesheet text. No `@import`. */
+  css: string
+  /** Script text, without `<script>` tags. May be empty. */
+  javascript: string
+}
+
+// ---------------------------------------------------------------------------
+// What the preview shows
+// ---------------------------------------------------------------------------
+
+/**
+ * The two kinds of result the app can show. A result is always exactly one of
+ * them, so UI code can switch on `kind` and never has to guess.
+ *
+ * - "page": the current backend format. An AI-written HTML/CSS/JavaScript page.
+ * - "design": the earlier format, a fixed-structure WebsiteBlueprint converted
+ *   to a WebsiteDesign (lib/blueprint-adapter.ts), plus the built-in sample
+ *   (which has no blueprint).
+ */
+export type SiteContent =
+  | { kind: "page"; page: GeneratedPage }
+  | { kind: "design"; design: WebsiteDesign; blueprint?: WebsiteBlueprint }
+
+// ---------------------------------------------------------------------------
 // Redesign result
 // ---------------------------------------------------------------------------
 
@@ -219,24 +256,18 @@ export interface RedesignResult {
    * turned into a URL (the "Before" pane then shows a text placeholder).
    */
   originalScreenshotUrl: string
-  design: WebsiteDesign
+  content: SiteContent
   /**
-   * Real backend only. The saved version this design and blueprint correspond
-   * to (1 after the first redesign, +1 per edit). Sent back as `baseVersion` so
-   * the backend can refuse an edit made on top of an outdated version. Absent
-   * for the sample and for backends that do not save versions.
+   * Real backend only. The saved version `content` corresponds to (1 after the
+   * first redesign, +1 per edit). Sent back as `baseVersion` so the backend can
+   * refuse an edit made on top of an outdated version. Absent for the sample.
    */
   versionNumber?: number
   /**
-   * Real backend only (absent for the built-in sample). The backend's own
-   * description of the site. `design` is derived from it, and prompt edits send
-   * it back to the backend, so it must be kept alongside the design.
-   */
-  blueprint?: WebsiteBlueprint
-  /**
-   * Real backend only. The page capture the blueprint was made from, kept so the
-   * design can be rebuilt after an edit (hero photo, gallery, social links).
-   * Its long `text` and `headings` are emptied to keep storage small.
+   * Real backend only. The page capture the content was made from. Its address
+   * is the base for relative URLs in a generated page, and its photos and links
+   * are used to rebuild a "design" result after an edit. Its long `text` and
+   * `headings` are emptied to keep storage small.
    */
   capture?: WebsiteCapture
 }

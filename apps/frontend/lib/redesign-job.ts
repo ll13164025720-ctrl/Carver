@@ -41,7 +41,11 @@ export interface RedesignJob {
   stageIndex: () => number
 }
 
-/** One running job per URL, so repeated triggers never start a second request. */
+/**
+ * One running job per URL and design direction, so repeated triggers (React's
+ * double-run effects, repeat clicks) never start a second request. A different
+ * instruction for the same URL is a different job.
+ */
 const inFlight = new Map<string, RedesignJob>()
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
@@ -52,13 +56,19 @@ export function stageIndexAt(elapsedMs: number): number {
   return Math.min(Math.max(index, 0), REDESIGN_STAGES.length - 1)
 }
 
+export interface RedesignJobOptions {
+  simulateFailure?: boolean
+  /** The owner's design direction. Only the real backend uses it. */
+  instruction?: string
+}
+
 async function run(
   url: string,
-  options: { simulateFailure?: boolean },
+  options: RedesignJobOptions,
   onStage: (stage: RedesignStage) => void
 ): Promise<RedesignResult> {
   // Real backend: no artificial delay and no simulated failure.
-  if (!isMockMode()) return redesignWebsite(url, { onStage })
+  if (!isMockMode()) return redesignWebsite(url, { onStage, instruction: options.instruction })
 
   if (options.simulateFailure) {
     // Fail part-way through so the failed stage is visible.
@@ -81,9 +91,10 @@ async function run(
  */
 export function startRedesignJob(
   url: string,
-  options: { simulateFailure?: boolean } = {}
+  options: RedesignJobOptions = {}
 ): RedesignJob {
-  const existing = inFlight.get(url)
+  const key = `${url}\u0000${options.instruction ?? ""}`
+  const existing = inFlight.get(key)
   if (existing) return existing
 
   const startedAt = Date.now()
@@ -101,10 +112,10 @@ export function startRedesignJob(
       return byTime
     },
   }
-  inFlight.set(url, job)
+  inFlight.set(key, job)
 
   const release = () => {
-    if (inFlight.get(url) === job) inFlight.delete(url)
+    if (inFlight.get(key) === job) inFlight.delete(key)
   }
   job.promise.then(release, release)
 

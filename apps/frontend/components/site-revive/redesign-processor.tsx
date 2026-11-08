@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { ArrowRight, FlaskConical, Globe, RotateCcw } from "lucide-react"
@@ -10,6 +10,7 @@ import {
   type ProcessingStatus,
 } from "@/components/site-revive/processing-stages"
 import { Button, buttonVariants } from "@/components/ui/button"
+import { clearDraft, instructionFor, parseDraft, readDraftJson } from "@/lib/redesign-draft"
 import { REDESIGN_STAGES, startRedesignJob } from "@/lib/redesign-job"
 import { clearProject, saveProject } from "@/lib/redesign-session"
 import { isMockMode } from "@/lib/site-revive-api"
@@ -17,6 +18,11 @@ import { cn } from "@/lib/utils"
 import { validateWebsiteUrl } from "@/lib/validate-url"
 
 const PREVIEW_PATH = "/preview"
+
+// Session storage cannot change while this page is open, so nothing to watch.
+const subscribeToNothing = () => () => {}
+// null on the server and during hydration.
+const readOnServer = (): string | null => null
 /** Short pause on the completed state so the user sees every stage finish. */
 const REDIRECT_DELAY_MS = 700
 const LAST_STAGE = REDESIGN_STAGES.length - 1
@@ -78,6 +84,14 @@ function ProcessingView({ url, hostname, simulateFailure }: ProcessingViewProps)
   const [phase, setPhase] = useState<Phase>({ status: "running" })
   const [stageIndex, setStageIndex] = useState(0)
 
+  // Only for showing the direction on screen. The job itself reads it from
+  // storage inside the effect below, so it never starts without it.
+  const draftJson = useSyncExternalStore(subscribeToNothing, readDraftJson, readOnServer)
+  const shownInstruction = useMemo(() => {
+    const draft = parseDraft(draftJson)
+    return draft && draft.url === url ? draft.instruction.trim() : ""
+  }, [draftJson, url])
+
   useEffect(() => {
     let cancelled = false
     let redirectTimer: ReturnType<typeof setTimeout> | undefined
@@ -90,6 +104,7 @@ function ProcessingView({ url, hostname, simulateFailure }: ProcessingViewProps)
     // double-invoked effects and repeat clicks never send a second request.
     const job = startRedesignJob(url, {
       simulateFailure: simulateFailure && attempt === 0,
+      instruction: instructionFor(url),
     })
 
     const ticker = setInterval(() => {
@@ -111,6 +126,9 @@ function ProcessingView({ url, hostname, simulateFailure }: ProcessingViewProps)
           return
         }
 
+        // Done: the typed address and direction are no longer needed. (After a
+        // failure they are kept so the user can retry or change the address.)
+        clearDraft()
         setStageIndex(LAST_STAGE)
         setPhase({ status: "done" })
         // replace(), not push(), so Back returns to the landing page and not
@@ -187,6 +205,17 @@ function ProcessingView({ url, hostname, simulateFailure }: ProcessingViewProps)
           </p>
         </div>
       </div>
+
+      {shownInstruction ? (
+        <div className="cv-surface mt-3 px-4 py-3.5">
+          <p className="text-xs text-cream/60">
+            Your design direction{mockMode ? " (not used in demo mode)" : ""}
+          </p>
+          <p className="mt-1 line-clamp-3 text-sm text-cream/85" title={shownInstruction}>
+            {shownInstruction}
+          </p>
+        </div>
+      ) : null}
 
       <ProcessingStages
         className="mt-8"

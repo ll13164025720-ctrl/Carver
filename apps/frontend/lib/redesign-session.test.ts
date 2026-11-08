@@ -11,7 +11,7 @@ import {
 import { mockCafeDesign } from "@/lib/mock-site-revive"
 import { adaptBlueprint } from "@/lib/blueprint-adapter"
 import type { WebsiteBlueprint, WebsiteCapture } from "@/types/backend"
-import type { RedesignResult } from "@/types/website"
+import type { RedesignResult, SiteContent } from "@/types/website"
 
 /** A minimal in-memory sessionStorage, installed as `window.sessionStorage`. */
 class FakeStorage {
@@ -66,14 +66,33 @@ const capture: WebsiteCapture = {
   screenshots: { desktop: "http://localhost:3002/artifacts/x-desktop.png", mobile: "" },
 }
 
+/** An earlier-format (blueprint) result, as a backend that returns blueprints produces. */
 function apiResult(): RedesignResult {
   const adapted = adaptBlueprint(blueprint, capture)
   assert.ok(adapted.ok)
   return {
     projectId: capture.captureId,
     originalScreenshotUrl: capture.screenshots.desktop,
-    design: adapted.value.design,
-    blueprint: adapted.value.blueprint,
+    content: { kind: "design", design: adapted.value.design, blueprint: adapted.value.blueprint },
+    capture,
+  }
+}
+
+/** A generated-page result, the current format. */
+const PAGE_CONTENT: SiteContent = {
+  kind: "page",
+  page: {
+    html: '<h1 id="title">Hello</h1><button id="go" type="button">Go</button>',
+    css: "body{margin:0}",
+    javascript: "document.getElementById('go').addEventListener('click',function(){});",
+  },
+}
+function pageResult(): RedesignResult {
+  return {
+    projectId: "69112fc8-f065-40e3-a706-99a23e69a8ad",
+    originalScreenshotUrl: capture.screenshots.desktop,
+    content: PAGE_CONTENT,
+    versionNumber: 2,
     capture,
   }
 }
@@ -81,7 +100,14 @@ function apiResult(): RedesignResult {
 const mockResult: RedesignResult = {
   projectId: "proj_joescafe-com",
   originalScreenshotUrl: "/samples/original-website.svg",
-  design: structuredClone(mockCafeDesign),
+  content: { kind: "design", design: structuredClone(mockCafeDesign) },
+}
+
+/** Narrows content to the earlier "design" kind. */
+function designContent(result: RedesignResult | undefined) {
+  assert.ok(result)
+  assert.equal(result.content.kind, "design")
+  return result.content as Extract<SiteContent, { kind: "design" }>
 }
 
 beforeEach(() => {
@@ -104,9 +130,8 @@ describe("redesign session storage: api mode", () => {
     assert.ok(loaded)
     assert.equal(loaded.sourceUrl, "https://joescafe.com/")
     assert.equal(loaded.mode, "api")
-    assert.deepEqual(loaded.result.blueprint, result.blueprint)
+    assert.deepEqual(designContent(loaded.result), designContent(result))
     assert.deepEqual(loaded.result.capture, capture)
-    assert.deepEqual(loaded.result.design, result.design)
     assert.equal(loaded.result.projectId, capture.captureId)
   })
 
@@ -114,12 +139,69 @@ describe("redesign session storage: api mode", () => {
     const original = apiResult()
     saveProject("https://joescafe.com/", original)
 
-    const edited = structuredClone(original.blueprint)
+    const edited = structuredClone(designContent(original).blueprint)
     assert.ok(edited)
     edited.sections[1].content.headline = "Edited"
-    saveProject("https://joescafe.com/", { ...original, blueprint: edited })
+    saveProject("https://joescafe.com/", {
+      ...original,
+      content: { ...designContent(original), blueprint: edited },
+    })
 
-    assert.equal(loadProject()?.result.blueprint?.sections[1].content.headline, "Edited")
+    assert.equal(designContent(loadProject()?.result).blueprint?.sections[1].content.headline, "Edited")
+  })
+
+  it("keeps a generated page exactly, with its version and capture", () => {
+    saveProject("https://joescafe.com/", pageResult())
+    const loaded = loadProject()
+    assert.ok(loaded)
+    assert.deepEqual(loaded.result.content, PAGE_CONTENT)
+    assert.equal(loaded.result.versionNumber, 2)
+    assert.equal(loaded.result.projectId, "69112fc8-f065-40e3-a706-99a23e69a8ad")
+    assert.equal(loaded.result.capture?.finalUrl, "https://joescafe.com/")
+  })
+
+  it("needs no blueprint for a generated page", () => {
+    saveProject("https://joescafe.com/", pageResult())
+    assert.ok(loadProject())
+  })
+
+  it("ignores a stored page that fails validation", () => {
+    for (const bad of [
+      { html: "<script>x</script>", css: "", javascript: "" },
+      { html: "<p onclick=\"x()\">a</p>", css: "", javascript: "" },
+      { html: "<meta http-equiv=refresh content=\"0;url=https://evil.example\">", css: "", javascript: "" },
+      { html: "<p>a</p>", css: "@import url(x);", javascript: "" },
+      { html: "", css: "", javascript: "" },
+      { html: 5, css: "", javascript: "" },
+    ]) {
+      const raw = JSON.parse(JSON.stringify({ sourceUrl: "x", mode: "api", result: pageResult() }))
+      raw.result.content.page = bad
+      assert.equal(parseStoredProject(JSON.stringify(raw)), null, JSON.stringify(bad).slice(0, 60))
+    }
+  })
+
+  it("ignores content of an unknown kind", () => {
+    const raw = JSON.parse(JSON.stringify({ sourceUrl: "x", mode: "api", result: pageResult() }))
+    raw.result.content = { kind: "hologram", page: PAGE_CONTENT }
+    assert.equal(parseStoredProject(JSON.stringify(raw)), null)
+  })
+
+  it("still reads a project stored in the earlier shape (design and blueprint at the top level)", () => {
+    const current = apiResult()
+    const earlier = {
+      sourceUrl: "https://joescafe.com/",
+      mode: "api",
+      result: {
+        projectId: current.projectId,
+        originalScreenshotUrl: current.originalScreenshotUrl,
+        design: designContent(current).design,
+        blueprint: designContent(current).blueprint,
+        capture,
+      },
+    }
+    const loaded = parseStoredProject(JSON.stringify(earlier))
+    assert.ok(loaded)
+    assert.deepEqual(designContent(loaded.result), designContent(current))
   })
 
   it("keeps the saved version number so the next edit is based on it", () => {
@@ -149,14 +231,17 @@ describe("redesign session storage: api mode", () => {
     assert.equal(loadProject(), null)
   })
 
-  it("ignores an api project that has no blueprint, since it could not be edited", () => {
-    saveProject("https://joescafe.com/", { ...apiResult(), blueprint: undefined })
+  it("ignores an earlier-format api project that has no blueprint, since it could not be edited", () => {
+    saveProject("https://joescafe.com/", {
+      ...apiResult(),
+      content: { kind: "design", design: designContent(apiResult()).design },
+    })
     assert.equal(loadProject(), null)
   })
 
   it("ignores a project whose blueprint or capture is damaged", () => {
     const raw = JSON.parse(JSON.stringify({ sourceUrl: "x", mode: "api", result: apiResult() }))
-    raw.result.blueprint.sections = []
+    raw.result.content.blueprint.sections = []
     assert.equal(parseStoredProject(JSON.stringify(raw)), null)
 
     const damagedCapture = JSON.parse(JSON.stringify({ sourceUrl: "x", mode: "api", result: apiResult() }))
@@ -166,7 +251,7 @@ describe("redesign session storage: api mode", () => {
 
   it("ignores a project whose design is not renderable", () => {
     const raw = JSON.parse(JSON.stringify({ sourceUrl: "x", mode: "api", result: apiResult() }))
-    delete raw.result.design.hero
+    delete raw.result.content.design.hero
     assert.equal(parseStoredProject(JSON.stringify(raw)), null)
   })
 })
@@ -179,8 +264,8 @@ describe("redesign session storage: mock mode", () => {
     const loaded = loadProject()
     assert.ok(loaded)
     assert.equal(loaded.mode, "mock")
-    assert.equal(loaded.result.blueprint, undefined)
-    assert.deepEqual(loaded.result.design, mockResult.design)
+    assert.equal(designContent(loaded.result).blueprint, undefined)
+    assert.deepEqual(designContent(loaded.result).design, designContent(mockResult).design)
   })
 
   it("ignores a project made with the real backend", () => {

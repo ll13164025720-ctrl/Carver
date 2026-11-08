@@ -107,6 +107,12 @@ export const GenerateBlueprintRequestSchema = z.object({
   description: z.string().trim().max(1000).optional(),
   sourceUrl: z.string().url().max(2048).optional(),
   sourceContent: z.string().max(28000).optional(),
+
+  /**
+   * Optional design direction typed by the business owner before the first
+   * redesign, e.g. "Create a clean, modern café website with warm colors".
+   */
+  redesignPrompt: z.string().trim().max(1000).optional(),
 });
 
 export const CaptureSiteRequestSchema = z.object({

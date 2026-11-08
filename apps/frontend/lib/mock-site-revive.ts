@@ -238,6 +238,6 @@ export async function mockRedesign(url: string): Promise<RedesignResult> {
     // to a captured screenshot instead.
     originalScreenshotUrl: "/samples/original-website.svg",
     // Copy so callers can edit the result without changing the shared sample.
-    design: structuredClone(mockCafeDesign),
+    content: { kind: "design", design: structuredClone(mockCafeDesign) },
   }
 }
