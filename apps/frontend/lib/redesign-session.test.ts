@@ -122,6 +122,21 @@ describe("redesign session storage: api mode", () => {
     assert.equal(loadProject()?.result.blueprint?.sections[1].content.headline, "Edited")
   })
 
+  it("keeps the saved version number so the next edit is based on it", () => {
+    saveProject("https://joescafe.com/", { ...apiResult(), versionNumber: 3 })
+    assert.equal(loadProject()?.result.versionNumber, 3)
+    saveProject("https://joescafe.com/", apiResult())
+    assert.equal(loadProject()?.result.versionNumber, undefined)
+  })
+
+  it("ignores a project with a damaged version number", () => {
+    for (const versionNumber of [0, -1, 1.5, "2", null]) {
+      const raw = JSON.parse(JSON.stringify({ sourceUrl: "x", mode: "api", result: apiResult() }))
+      raw.result.versionNumber = versionNumber
+      assert.equal(parseStoredProject(JSON.stringify(raw)), null, String(versionNumber))
+    }
+  })
+
   it("keeps an empty screenshot URL (the backend path could not be resolved)", () => {
     saveProject("https://joescafe.com/", { ...apiResult(), originalScreenshotUrl: "" })
     assert.equal(loadProject()?.result.originalScreenshotUrl, "")

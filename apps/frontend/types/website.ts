@@ -211,6 +211,7 @@ export interface WebsiteDesign {
 
 /** What a redesign request returns. */
 export interface RedesignResult {
+  /** The backend's project id. All versions of one redesign live under it. */
   projectId: string
   /**
    * Screenshot of the original site: an absolute http(s) URL or a site-relative
@@ -219,6 +220,13 @@ export interface RedesignResult {
    */
   originalScreenshotUrl: string
   design: WebsiteDesign
+  /**
+   * Real backend only. The saved version this design and blueprint correspond
+   * to (1 after the first redesign, +1 per edit). Sent back as `baseVersion` so
+   * the backend can refuse an edit made on top of an outdated version. Absent
+   * for the sample and for backends that do not save versions.
+   */
+  versionNumber?: number
   /**
    * Real backend only (absent for the built-in sample). The backend's own
    * description of the site. `design` is derived from it, and prompt edits send

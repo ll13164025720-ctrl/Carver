@@ -14,6 +14,7 @@ import {
   type PromptEditFeedback,
 } from "@/components/site-revive/prompt-editor"
 import { ProcessingFallback } from "@/components/site-revive/processing-fallback"
+import { VersionHistory } from "@/components/site-revive/version-history"
 import { WebsiteRenderer } from "@/components/site-revive/website-renderer"
 import { DEMO_EDIT_COMMANDS } from "@/lib/design-editor"
 import {
@@ -24,9 +25,12 @@ import {
 } from "@/lib/redesign-session"
 import {
   API_EDIT_EXAMPLES,
+  SiteReviveApiError,
   describeApiError,
   editWebsite,
+  fetchLatestProject,
   isMockMode,
+  type SavedProject,
 } from "@/lib/site-revive-api"
 import { cn } from "@/lib/utils"
 import type { WebsiteBlueprint } from "@/types/backend"
@@ -107,7 +111,10 @@ export function PreviewWorkspace() {
   const [edited, setEdited] = useState<{
     design: WebsiteDesign
     blueprint?: WebsiteBlueprint
+    versionNumber?: number
   } | null>(null)
+  // An older saved version being previewed (read-only). null shows the latest.
+  const [viewing, setViewing] = useState<SavedProject | null>(null)
 
   if (state.status === "loading") return <ProcessingFallback />
   if (state.status === "empty") return <PreviewEmptyState />
@@ -116,7 +123,25 @@ export function PreviewWorkspace() {
   const design = edited?.design ?? result.design
   // Every edit starts from the latest blueprint, not the one first generated.
   const blueprint = edited?.blueprint ?? result.blueprint
+  // ...and on top of the latest saved version, so the backend can refuse it if
+  // the project has moved on (an edit made in another window).
+  const versionNumber = edited?.versionNumber ?? result.versionNumber
   const hostname = hostnameOf(sourceUrl)
+
+  /** Makes a saved state the one shown and stored, so edits and refreshes continue from it. */
+  function adopt(next: { design: WebsiteDesign; blueprint?: WebsiteBlueprint; versionNumber?: number }) {
+    setEdited(next)
+    setViewing(null)
+    if (next.blueprint) {
+      // Best effort: if storage refuses, the state above still drives the page.
+      saveProject(sourceUrl, {
+        ...result,
+        design: next.design,
+        blueprint: next.blueprint,
+        ...(next.versionNumber ? { versionNumber: next.versionNumber } : {}),
+      })
+    }
+  }
 
   async function applyPrompt(instruction: string): Promise<PromptEditFeedback> {
     try {
@@ -125,23 +150,36 @@ export function PreviewWorkspace() {
         prompt: instruction,
         currentDesign: design,
         blueprint,
+        versionNumber,
         capture: result.capture,
       })
-      setEdited({ design: edit.design, blueprint: edit.blueprint })
-      if (edit.blueprint) {
-        // Best effort: if storage refuses, the edit still shows and later edits
-        // still use the blueprint held in state.
-        saveProject(sourceUrl, {
-          ...result,
-          design: edit.design,
-          blueprint: edit.blueprint,
-        })
-      }
+      adopt({
+        design: edit.design,
+        blueprint: edit.blueprint,
+        // Keep the old number if the backend did not save a version.
+        versionNumber: edit.versionNumber ?? versionNumber,
+      })
       // With the real backend an edit that changes nothing visible is reported
       // as a problem so the text stays in the box to be rephrased. In sample
       // mode "already that value" is a normal answer.
       return { ok: edit.changed || isMockMode(), message: edit.summary }
     } catch (error) {
+      // Another window edited this project first. Catch up with its latest
+      // version (a refresh would not help: this page's copy is the old one), then
+      // ask the user to repeat the change.
+      if (error instanceof SiteReviveApiError && error.code === "conflict") {
+        try {
+          adopt(await fetchLatestProject(result.projectId, result.capture))
+        } catch (syncError) {
+          return {
+            ok: false,
+            message: describeApiError(
+              syncError,
+              "This design changed in another window. Reload the page to continue."
+            ),
+          }
+        }
+      }
       return {
         ok: false,
         message: describeApiError(
@@ -164,12 +202,43 @@ export function PreviewWorkspace() {
         onDeviceChange={setDevice}
       />
 
-      {showAfter ? (
+      {showAfter && viewing ? (
+        <div
+          role="status"
+          className="cv-surface mt-8 flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6"
+        >
+          <p className="text-sm text-cream">
+            You are viewing version {viewing.versionNumber}, an older version. Editing is turned off
+            until you go back to the latest version.
+          </p>
+          <button
+            type="button"
+            onClick={() => setViewing(null)}
+            className="cv-btn cv-btn-primary shrink-0"
+          >
+            Back to latest
+          </button>
+        </div>
+      ) : null}
+
+      {showAfter && !viewing ? (
         <PromptEditor
           onApply={applyPrompt}
           examples={isMockMode() ? DEMO_EDIT_COMMANDS : API_EDIT_EXAMPLES}
           placeholder={isMockMode() ? undefined : API_EDIT_PLACEHOLDER}
           className="cv-surface mt-8 p-5 sm:p-6"
+        />
+      ) : null}
+
+      {showAfter && !isMockMode() && versionNumber ? (
+        <VersionHistory
+          projectId={result.projectId}
+          latestVersion={versionNumber}
+          viewingVersion={viewing?.versionNumber ?? null}
+          capture={result.capture}
+          onView={setViewing}
+          onBackToLatest={() => setViewing(null)}
+          className="mt-4"
         />
       ) : null}
 
@@ -196,11 +265,15 @@ export function PreviewWorkspace() {
         {showAfter ? (
           <PreviewPane
             label="After"
-            caption={`Redesign preview, ${DEVICE_VIEWPORTS[device].width}px wide`}
+            caption={
+              viewing
+                ? `Version ${viewing.versionNumber} (not the latest), ${DEVICE_VIEWPORTS[device].width}px wide`
+                : `Redesign preview, ${DEVICE_VIEWPORTS[device].width}px wide`
+            }
             tone="after"
           >
             <DeviceFrame device={device} address={`${hostname} (redesign preview)`}>
-              <WebsiteRenderer design={design} className="h-full" />
+              <WebsiteRenderer design={viewing?.design ?? design} className="h-full" />
             </DeviceFrame>
           </PreviewPane>
         ) : null}
