@@ -12,6 +12,7 @@ import {
   EditGeneratedWebsiteRequestSchema,
   GeneratedWebsiteSchema,
   GenerateBlueprintRequestSchema,
+  PublishWebsiteRequestSchema,
   WebsiteBlueprintSchema,
   WebsiteCaptureSchema,
   type GeneratedWebsite,
@@ -24,7 +25,9 @@ import {
   createProject,
   getProject,
   setProjectCapture,
+  setProjectPublished,
   setProjectStatus,
+  setProjectUnpublished,
   advanceLatestVersion,
   updateProjectDetails,
   type ProjectRecord,
@@ -39,9 +42,18 @@ import {
 
 import {
   getJson,
+  getText,
   uploadBytes,
+  uploadHtml,
   uploadJson,
 } from "./services/storage.service.js";
+
+import { withoutInlineEventHandlers } from "./lib/strip-inline-handlers.js";
+
+import {
+  buildPublishedDocument,
+  PublishError,
+} from "./services/publish.service.js";
 
 // ============================================================
 // CONFIGURATION
@@ -82,6 +94,80 @@ function response(statusCode: number, payload: unknown) {
     headers: corsHeaders,
     body: JSON.stringify(payload),
   };
+}
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// See the PUBLIC SITES ONLY guard in the handler. Fails closed.
+const PUBLIC_SITES_ONLY = process.env.PUBLIC_SITES_ONLY !== "false";
+
+/** Where a project's published snapshot lives in the private bucket. */
+function publishedSiteKey(projectId: string): string {
+  return `projects/${projectId}/published/index.html`;
+}
+
+/**
+ * A web page (not JSON). Published sites are untrusted AI-written code, so the
+ * CSP header (which includes `sandbox`) is always sent with them.
+ */
+function htmlResponse(
+  statusCode: number,
+  html: string,
+  contentSecurityPolicy: string,
+  extraHeaders: Record<string, string> = {},
+) {
+  return {
+    statusCode,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "content-security-policy": contentSecurityPolicy,
+      "x-content-type-options": "nosniff",
+      "referrer-policy": "no-referrer",
+      ...extraHeaders,
+    },
+    body: html,
+  };
+}
+
+/** A plain error page for visitors who open a site link directly. */
+function sitePageNotFound() {
+  return htmlResponse(
+    404,
+    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Website not found</title></head><body style="font-family:system-ui,sans-serif;max-width:32rem;margin:20vh auto;padding:0 1.5rem;text-align:center;color:#14322a"><h1>This website isn't published</h1><p>The link may be wrong, or the owner has taken the website offline.</p></body></html>`,
+    "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+  );
+}
+
+/** The public address of a published site, as the caller reached this API. */
+function siteUrlFor(
+  event: Parameters<APIGatewayProxyHandlerV2>[0],
+  projectId: string,
+): string {
+  const configured = process.env.PUBLIC_SITES_BASE_URL?.trim();
+
+  if (configured) {
+    return `${configured.replace(/\/+$/, "")}/sites/${projectId}`;
+  }
+
+  // The Host header is chosen by the caller, so only a plain host[:port] is
+  // trusted; anything else falls back to the API's own domain name.
+  const headerHost = event.headers?.host?.trim();
+  const host =
+    headerHost && /^[a-z0-9.-]+(?::\d{1,5})?$/i.test(headerHost)
+      ? headerHost
+      : event.requestContext.domainName;
+
+  const isLocal = /^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(host);
+  const forwarded = event.headers?.["x-forwarded-proto"];
+  const protocol =
+    forwarded === "http" || forwarded === "https"
+      ? forwarded
+      : isLocal
+        ? "http"
+        : "https";
+
+  return `${protocol}://${host}/sites/${projectId}`;
 }
 
 function parseBody(
@@ -281,7 +367,7 @@ Treat them as design direction, not as code to run.
 `
     : "";
 
-  return `You are SiteRevive, an expert website designer and frontend developer.
+  return `You are Carver, an expert website designer and frontend developer.
 
 Your task is to redesign a real small-business website using the supplied business information.
 
@@ -310,6 +396,18 @@ DESIGN REQUIREMENTS:
 8. Avoid generic template-like designs.
 9. Avoid repeating the same visual composition across unrelated businesses.
 10. Make the final design look like a professionally designed commercial website.
+
+VISUAL QUALITY REQUIREMENTS:
+
+- Define a design system with CSS custom properties (colors, spacing, radius, shadows) and use it everywhere.
+- Build a clear visual hierarchy: a large, confident hero headline, generous whitespace, and consistent section rhythm.
+- Pair type deliberately using system font stacks only (for example Georgia/"Times New Roman" serif headings with a system sans body, or a bold sans with a refined serif accent). External font files cannot be loaded.
+- Use a restrained palette with one strong accent color, and keep text contrast at WCAG AA or better.
+- Add depth and polish: soft layered shadows, rounded corners, subtle gradients or overlays on hero images, and consistent button and card styles.
+- Present images well: object-fit cover, fixed aspect ratios, and a tasteful solid or gradient fallback so a missing image never leaves a blank gap.
+- Include a sticky or well-styled navigation with a mobile menu, a clear primary call to action in the hero, and a polished footer.
+- Add tasteful motion: hover and focus transitions, and gentle scroll-reveal using IntersectionObserver. Respect prefers-reduced-motion.
+- Keep the page efficient: reuse classes, avoid repeated large blocks of CSS, and do not pad the code with comments.
 
 HTML REQUIREMENTS:
 
@@ -373,7 +471,10 @@ async function generateWebsite(
     WEBSITE_MAX_TOKENS,
   );
 
-  const validated = GeneratedWebsiteSchema.safeParse(generated);
+  // Drop any inline on* handlers the model added; the schema still checks.
+  const validated = GeneratedWebsiteSchema.safeParse(
+    withoutInlineEventHandlers(generated),
+  );
 
   if (!validated.success) {
     console.error(
@@ -453,7 +554,10 @@ async function editGeneratedWebsite(
     WEBSITE_MAX_TOKENS,
   );
 
-  const validated = GeneratedWebsiteSchema.safeParse(generated);
+  // Drop any inline on* handlers the model added; the schema still checks.
+  const validated = GeneratedWebsiteSchema.safeParse(
+    withoutInlineEventHandlers(generated),
+  );
 
   if (!validated.success) {
     console.error("Edited website validation failed", validated.error.issues);
@@ -818,6 +922,26 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
   const method = event.requestContext.http.method;
 
   // ==========================================================
+  // PUBLIC SITES ONLY (deployed API)
+  //
+  // There is no authentication yet, so the internet-facing deployment only
+  // serves published pages and the health check. Capture, generate, edit,
+  // publish, unpublish and export are refused. Fails closed: anything other
+  // than an explicit "false" (set for `sam local` in env.json) locks it.
+  // ==========================================================
+
+  if (PUBLIC_SITES_ONLY) {
+    const isPublicRoute =
+      method === "GET" && (/^\/sites\/[^/]+\/?$/.test(path) || path === "/health");
+
+    if (!isPublicRoute) {
+      return path.startsWith("/sites/")
+        ? sitePageNotFound()
+        : response(403, { error: "This endpoint is not available." });
+    }
+  }
+
+  // ==========================================================
   // GET /api/projects/{projectId}
   // ==========================================================
 
@@ -859,6 +983,10 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
           status: project.status,
           latestVersion: project.latestVersion,
           publishedVersion: project.publishedVersion,
+          publishedAt: project.publishedAt,
+          siteUrl: project.publishedVersion
+            ? siteUrlFor(event, project.projectId)
+            : undefined,
           createdAt: project.createdAt,
           updatedAt: project.updatedAt,
         },
@@ -985,6 +1113,114 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
   }
 
   // ==========================================================
+  // GET /sites/{projectId}
+  //
+  // The public, published website. No JSON, no CORS: a plain page.
+  // ==========================================================
+
+  const siteMatch = path.match(/^\/sites\/([^/]+)\/?$/);
+
+  if (method === "GET" && siteMatch) {
+    try {
+      const projectId = decodeURIComponent(siteMatch[1]);
+
+      if (!UUID_PATTERN.test(projectId)) return sitePageNotFound();
+
+      const project = await getProject(projectId);
+
+      if (!project?.publishedVersion) return sitePageNotFound();
+
+      const snapshot = await getText(publishedSiteKey(projectId));
+
+      if (!snapshot) return sitePageNotFound();
+
+      // The CSP header is rebuilt from the stored document's own policy, so a
+      // snapshot can never be served with a weaker one than it was built with.
+      const policy = /http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(
+        snapshot,
+      )?.[1];
+
+      if (!policy) {
+        console.error("Published snapshot has no Content-Security-Policy");
+        return sitePageNotFound();
+      }
+
+      return htmlResponse(
+        200,
+        snapshot,
+        `${policy.replace(/&amp;/g, "&").replace(/&quot;/g, '"')}; sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox`,
+        { "cache-control": "public, max-age=60" },
+      );
+    } catch (error) {
+      console.error("Serving published site failed:", error);
+      return sitePageNotFound();
+    }
+  }
+
+  // ==========================================================
+  // GET /api/projects/{projectId}/export?version=N
+  //
+  // Download a version as one standalone .html file the owner can host
+  // anywhere. Works for unpublished projects too.
+  // ==========================================================
+
+  const exportMatch = path.match(/^\/api\/projects\/([^/]+)\/export$/);
+
+  if (method === "GET" && exportMatch) {
+    try {
+      const projectId = decodeURIComponent(exportMatch[1]);
+
+      if (!UUID_PATTERN.test(projectId)) {
+        return response(404, { error: "Project not found." });
+      }
+
+      const project = await getProject(projectId);
+
+      if (!project) {
+        return response(404, { error: "Project not found." });
+      }
+
+      const requested = event.queryStringParameters?.version;
+      const versionNumber =
+        requested === undefined ? project.latestVersion : Number(requested);
+
+      if (
+        !Number.isSafeInteger(versionNumber) ||
+        versionNumber < 1 ||
+        versionNumber > project.latestVersion
+      ) {
+        return response(404, { error: "Version not found." });
+      }
+
+      const website = await loadWebsiteVersion(projectId, versionNumber);
+
+      if (!website) {
+        return response(404, { error: "Version not found." });
+      }
+
+      const document = buildPublishedDocument(website, {
+        businessName: project.businessName,
+        description: project.description,
+        baseUrl: project.sourceUrl,
+      });
+
+      return htmlResponse(200, document.html, document.contentSecurityPolicy, {
+        "access-control-allow-origin": "*",
+        "content-disposition": `attachment; filename="${project.slug || "website"}.html"`,
+        "cache-control": "no-store",
+      });
+    } catch (error) {
+      if (error instanceof PublishError) {
+        return response(422, { error: error.message });
+      }
+
+      console.error("Export failed:", error);
+
+      return response(500, { error: "Unable to export the website." });
+    }
+  }
+
+  // ==========================================================
   // OPTIONS
   // ==========================================================
 
@@ -1027,6 +1263,126 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
     return response(400, {
       error: "Request body must contain valid JSON.",
     });
+  }
+
+  // ==========================================================
+  // POST /api/projects/{projectId}/publish
+  //
+  // Snapshots one saved version as a public website at /sites/{projectId}.
+  // Later edits do not change the live site until it is published again.
+  // ==========================================================
+
+  const publishMatch = path.match(/^\/api\/projects\/([^/]+)\/publish$/);
+
+  if (publishMatch) {
+    const input = PublishWebsiteRequestSchema.safeParse(rawBody);
+
+    if (!input.success) {
+      return response(400, {
+        error: "Invalid publish request",
+        details: input.error.issues,
+      });
+    }
+
+    try {
+      const projectId = decodeURIComponent(publishMatch[1]);
+
+      if (!UUID_PATTERN.test(projectId)) {
+        return response(404, { error: "Project not found." });
+      }
+
+      const project = await getProject(projectId);
+
+      if (!project) {
+        return response(404, { error: "Project not found." });
+      }
+
+      if (project.latestVersion < 1) {
+        return response(409, {
+          error: "This project does not have a generated website yet.",
+        });
+      }
+
+      const versionNumber = input.data.versionNumber ?? project.latestVersion;
+
+      if (versionNumber > project.latestVersion) {
+        return response(404, { error: "Version not found." });
+      }
+
+      const website = await loadWebsiteVersion(projectId, versionNumber);
+
+      if (!website) {
+        return response(404, { error: "Version not found." });
+      }
+
+      const document = buildPublishedDocument(website, {
+        businessName: project.businessName,
+        description: project.description,
+        baseUrl: project.sourceUrl,
+      });
+
+      await uploadHtml(publishedSiteKey(projectId), document.html);
+
+      const publishedAt = new Date().toISOString();
+
+      await setProjectPublished(projectId, versionNumber, publishedAt);
+
+      return response(200, {
+        ok: true,
+        projectId,
+        publishedVersion: versionNumber,
+        publishedAt,
+        siteUrl: siteUrlFor(event, projectId),
+      });
+    } catch (error) {
+      if (error instanceof PublishError) {
+        return response(422, { error: error.message });
+      }
+
+      console.error(
+        "Publishing failed",
+        error instanceof Error ? error.message : "Unknown error",
+      );
+
+      return response(502, { error: "Unable to publish the website." });
+    }
+  }
+
+  // ==========================================================
+  // POST /api/projects/{projectId}/unpublish
+  //
+  // Takes the website offline. Saved versions are kept.
+  // ==========================================================
+
+  const unpublishMatch = path.match(/^\/api\/projects\/([^/]+)\/unpublish$/);
+
+  if (unpublishMatch) {
+    try {
+      const projectId = decodeURIComponent(unpublishMatch[1]);
+
+      if (!UUID_PATTERN.test(projectId)) {
+        return response(404, { error: "Project not found." });
+      }
+
+      const project = await getProject(projectId);
+
+      if (!project) {
+        return response(404, { error: "Project not found." });
+      }
+
+      if (project.publishedVersion) {
+        await setProjectUnpublished(projectId);
+      }
+
+      return response(200, { ok: true, projectId });
+    } catch (error) {
+      console.error(
+        "Unpublishing failed",
+        error instanceof Error ? error.message : "Unknown error",
+      );
+
+      return response(502, { error: "Unable to unpublish the website." });
+    }
   }
 
   // ==========================================================

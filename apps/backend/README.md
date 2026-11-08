@@ -30,6 +30,12 @@ Docker Desktop must be running for `sam local`.
 - `GET /api/projects/{projectId}` — returns project metadata and the latest saved Blueprint.
 - `GET /api/projects/{projectId}/versions` — returns version history, newest first.
 - `GET /api/projects/{projectId}/versions/{versionNumber}` — returns a particular saved Blueprint version.
+- `POST /api/projects/{projectId}/publish` — body `{ "versionNumber"?: number }` (defaults to the latest). Snapshots that version as a standalone page in S3, marks the project `PUBLISHED`, and returns `{ publishedVersion, publishedAt, siteUrl }`. Edits made afterwards do not change the live site until it is published again.
+- `POST /api/projects/{projectId}/unpublish` — takes the site offline. Saved versions are kept.
+- `GET /api/projects/{projectId}/export?version=N` — downloads a version as one standalone `.html` file the owner can host anywhere (works without publishing).
+- `GET /sites/{projectId}` — the public published website. Served with a restrictive Content-Security-Policy and `sandbox` (no network access, no forms, opaque origin).
+
+Set `PUBLIC_SITES_BASE_URL` (for example a CloudFront or custom-domain origin in front of the API) if published links should not use the API's own host. There is no authentication yet: anyone who knows a project ID can publish or unpublish it, so add auth before production.
 
 The local SAM template points to `http://host.docker.internal:3002/capture` because the Lambda emulator runs in Docker while the capture worker runs on the Mac host. The browser-facing screenshot base is `http://localhost:3002`.
 

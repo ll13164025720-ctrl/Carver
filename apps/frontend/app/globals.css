@@ -202,10 +202,14 @@
 .cv-btn-primary {
   background-color: #f6f1e7;
   color: #14322a;
+  box-shadow: 0 10px 24px -14px rgb(0 0 0 / 0.7);
 }
 .cv-btn-primary:hover {
   background-color: #e6dcc4;
   color: #14322a;
+}
+.cv-btn-primary:disabled {
+  box-shadow: none;
 }
 .cv-btn-secondary {
   background-color: transparent;
@@ -268,8 +272,99 @@
 /* Surfaces */
 .cv-surface {
   border: 1px solid var(--cv-line);
-  background-color: rgb(246 241 231 / 0.045);
+  background: linear-gradient(
+    180deg,
+    rgb(246 241 231 / 0.075),
+    rgb(246 241 231 / 0.03)
+  );
   border-radius: 0.75rem;
+  box-shadow:
+    inset 0 1px 0 rgb(246 241 231 / 0.07),
+    0 20px 44px -28px rgb(0 0 0 / 0.6);
+}
+
+/* Landing atmosphere */
+.cv-hero {
+  position: relative;
+  isolation: isolate;
+  background:
+    radial-gradient(56rem 26rem at 50% -6rem, rgb(201 163 94 / 0.24), transparent 70%),
+    radial-gradient(38rem 24rem at 105% 35%, rgb(38 86 71 / 0.75), transparent 70%),
+    radial-gradient(34rem 22rem at -5% 75%, rgb(38 86 71 / 0.6), transparent 70%),
+    #14322a;
+}
+.cv-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgb(246 241 231 / 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(246 241 231 / 0.045) 1px, transparent 1px);
+  background-size: 56px 56px;
+  -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 0%, #000 25%, transparent 78%);
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 0%, #000 25%, transparent 78%);
+}
+
+.cv-gradient-text {
+  color: #e2c88f; /* fallback where background-clip: text is unsupported */
+  background-image: linear-gradient(100deg, #f0dcae 0%, #c9a35e 52%, #f6f1e7 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.cv-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.9rem;
+  border: 1px solid var(--cv-line-strong);
+  border-radius: 9999px;
+  background-color: rgb(246 241 231 / 0.06);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--cv-text-muted);
+  backdrop-filter: blur(6px);
+}
+
+/* Cards on the cream "How it works" section */
+.cv-card {
+  position: relative;
+  border: 1px solid rgb(20 50 42 / 0.12);
+  border-radius: 1rem;
+  background-color: #fbf8f1;
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 0.8) inset,
+    0 18px 40px -26px rgb(20 50 42 / 0.45);
+  transition:
+    transform 220ms ease,
+    box-shadow 220ms ease,
+    border-color 220ms ease;
+}
+.cv-card:hover {
+  transform: translateY(-4px);
+  border-color: rgb(201 163 94 / 0.7);
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 0.8) inset,
+    0 28px 50px -26px rgb(20 50 42 / 0.55);
+}
+
+/* Entrance animation for the landing hero */
+@keyframes cv-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.cv-rise {
+  animation: cv-rise 700ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: var(--cv-delay, 0ms);
 }
 
 /* Links and small interactive text */
@@ -289,7 +384,14 @@
 @media (prefers-reduced-motion: reduce) {
   .cv-btn,
   .cv-input,
-  .cv-link {
+  .cv-link,
+  .cv-card {
     transition: none;
+  }
+  .cv-rise {
+    animation: none;
+  }
+  .cv-card:hover {
+    transform: none;
   }
 }

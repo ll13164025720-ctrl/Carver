@@ -5,8 +5,11 @@ Description: SiteRevive MVP API - Bedrock website blueprint generation
 Globals:
   Function:
     Runtime: nodejs22.x
-    Timeout: 45
-    MemorySize: 512
+    # Bedrock website generation takes 50-120 s (see GENERATE_TIMEOUT_MS in the
+    # frontend). Note: a deployed HTTP API gateway caps requests at 30 s, so this
+    # long timeout only helps `sam local`.
+    Timeout: 300
+    MemorySize: 1024
     Architectures:
       - arm64
 
@@ -42,6 +45,12 @@ Resources:
           # SAM local: access the Playwright worker on the host Mac.
           CAPTURE_WORKER_URL: http://host.docker.internal:3002/capture
           CAPTURE_WORKER_PUBLIC_URL: http://localhost:3002
+          # Base for published site links. Empty = derive from the request host.
+          # Set to http://localhost:3001 in env.json for `sam local`.
+          PUBLIC_SITES_BASE_URL: ""
+          # No auth yet: the deployed API serves only /sites/* and /health.
+          # env.json sets "false" so `sam local` keeps the full API.
+          PUBLIC_SITES_ONLY: "true"
 
       Policies:
         # Only the DynamoDB operations required by the backend.
@@ -131,6 +140,34 @@ Resources:
           Properties:
             ApiId: !Ref SiteReviveHttpApi
             Path: /api/projects/{projectId}/versions/{versionNumber}
+            Method: GET
+
+        PublishProject:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SiteReviveHttpApi
+            Path: /api/projects/{projectId}/publish
+            Method: POST
+
+        UnpublishProject:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SiteReviveHttpApi
+            Path: /api/projects/{projectId}/unpublish
+            Method: POST
+
+        ExportProject:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SiteReviveHttpApi
+            Path: /api/projects/{projectId}/export
+            Method: GET
+
+        PublishedSite:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SiteReviveHttpApi
+            Path: /sites/{projectId}
             Method: GET
 
     Metadata:

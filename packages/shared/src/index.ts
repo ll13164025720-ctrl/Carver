@@ -130,6 +130,14 @@ export const EditGeneratedWebsiteRequestSchema = z.object({
   prompt: z.string().trim().min(1).max(1000),
 });
 
+/**
+ * Publishing makes one saved version publicly viewable at /sites/{projectId}.
+ * Omit `versionNumber` to publish the latest version.
+ */
+export const PublishWebsiteRequestSchema = z.object({
+  versionNumber: z.number().int().min(1).optional(),
+});
+
 // ============================================================
 // CRAWLER CAPTURE SCHEMAS
 // ============================================================
@@ -257,6 +265,8 @@ export type CaptureSiteRequest = z.infer<typeof CaptureSiteRequestSchema>;
 export type EditGeneratedWebsiteRequest = z.infer<
   typeof EditGeneratedWebsiteRequestSchema
 >;
+
+export type PublishWebsiteRequest = z.infer<typeof PublishWebsiteRequestSchema>;
 
 export type WebsiteCapture = z.infer<typeof WebsiteCaptureSchema>;
 

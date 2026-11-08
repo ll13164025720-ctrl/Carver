@@ -83,7 +83,7 @@ export function DeviceFrame({ device, address, children, className }: DeviceFram
     return (
       <div
         className={cn(
-          "mx-auto w-full overflow-hidden rounded-[2.25rem] border-forest-deep bg-forest-deep",
+          "mx-auto w-full overflow-hidden rounded-[2.25rem] border-forest-deep bg-forest-deep shadow-2xl shadow-black/40",
           className
         )}
         style={{
@@ -105,7 +105,7 @@ export function DeviceFrame({ device, address, children, className }: DeviceFram
   return (
     <div
       className={cn(
-        "mx-auto overflow-hidden rounded-lg border border-cream/20 bg-forest-deep",
+        "mx-auto overflow-hidden rounded-lg border border-cream/20 bg-forest-deep shadow-2xl shadow-black/40",
         className
       )}
       // Never wider than the real desktop viewport (plus the 1px borders).
