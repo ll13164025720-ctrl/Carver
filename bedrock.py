@@ -21,7 +21,7 @@ client = boto3.client(
 # The model or inference ID for the model you want to use
 # !If you get an error with "Retry your request with the ID or ARN", use the inference ID version below
 
-model_id = "anthropic.claude-sonnet-5-5"  # Inference profile ID (requires us. prefix)
+model_id = "us.anthropic.claude-sonnet-5"  # Inference profile ID (requires us. prefix); allowlisted in the Workshop account
 
 # Some models don't require an inference profile and use a plain Model ID instead:
 # model_id = "amazon.titan-text-lite-v1"
