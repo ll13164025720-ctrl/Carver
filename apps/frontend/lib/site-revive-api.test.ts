@@ -199,8 +199,13 @@ process.on("exit", () => {
 // ---------------------------------------------------------------------------
 
 describe("mode and configuration", () => {
-  it("defaults to mock mode", () => {
+  it("defaults to api mode", () => {
     setEnvironment({})
+    assert.equal(isMockMode(), false)
+  })
+
+  it("is in mock mode only when explicitly configured", () => {
+    setEnvironment({ mode: "mock" })
     assert.equal(isMockMode(), true)
   })
 
