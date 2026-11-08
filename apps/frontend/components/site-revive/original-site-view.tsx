@@ -39,7 +39,7 @@ export function OriginalSiteView({ screenshotUrl }: OriginalSiteViewProps) {
         />
       </div>
       {mockMode ? (
-        <p className="pointer-events-none absolute bottom-3 left-3 rounded-full bg-black/75 px-3 py-1 text-xs font-medium text-white">
+        <p className="pointer-events-none absolute bottom-3 left-3 rounded-full bg-forest/90 px-3 py-1 text-xs font-medium text-cream">
           Sample screenshot (placeholder)
         </p>
       ) : null}

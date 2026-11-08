@@ -44,25 +44,25 @@ export function PreviewToolbar({
       <div>
         <Link
           href="/"
-          className="inline-flex items-center gap-2 rounded-md text-sm font-medium text-white/70 transition-colors outline-none hover:text-white focus-visible:ring-3 focus-visible:ring-white/50"
+          className="inline-flex items-center gap-2 cv-link text-sm font-medium"
         >
           <ArrowLeft className="size-4" aria-hidden />
           Back to home
         </Link>
 
-        <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2">
-          <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
+        <div className="mt-6 flex flex-wrap items-center gap-x-4 gap-y-2">
+          <h1 className="cv-heading text-3xl sm:text-5xl">
             Your redesign preview
           </h1>
           {mockMode ? (
-            <p className="inline-flex items-center gap-2 rounded-full border border-white/15 px-3 py-1 text-xs font-medium text-white/70">
+            <p className="inline-flex items-center gap-2 rounded-full border border-cream/25 px-3 py-1 text-xs font-medium text-cream/75">
               <FlaskConical className="size-3.5" aria-hidden />
               Demo mode
             </p>
           ) : null}
         </div>
         {mockMode ? (
-          <p className="mt-3 max-w-2xl text-sm leading-6 text-white/50">
+          <p className="mt-3 max-w-2xl text-sm leading-6 text-cream/65">
             This is a sample design, not generated from {hostname}. The
             &ldquo;before&rdquo; image is a placeholder, because demo mode
             doesn&apos;t capture your real website.

@@ -1,3 +1,4 @@
+import Image from "next/image"
 import Link from "next/link"
 
 import { cn } from "@/lib/utils"
@@ -12,30 +13,30 @@ export function SiteHeader({ className, showNav = true }: SiteHeaderProps) {
   return (
     <header
       className={cn(
-        "mx-auto flex w-full max-w-6xl items-center justify-between px-6 py-5",
+        "mx-auto flex w-full max-w-6xl items-center justify-between px-6 py-6 sm:px-8 sm:py-8",
         className
       )}
     >
       <Link
         href="/"
-        className="flex items-center gap-3 rounded-md outline-none focus-visible:ring-3 focus-visible:ring-white/50"
-        aria-label="SiteRevive home"
+        className="cv-link -ml-1 flex items-center p-1"
+        aria-label="CARVER home"
       >
-        {/* Logo slot: replace this placeholder with the SiteRevive logo
-            (e.g. <Image src="/logo.svg" width={32} height={32} alt="" />). */}
-        <span
-          aria-hidden
-          className="size-8 shrink-0 rounded-lg border border-dashed border-white/30"
+        {/* Transparent-background wordmark, so it sits directly on the green. */}
+        <Image
+          src="/carver-logo-on-dark.svg"
+          alt="CARVER"
+          width={3188}
+          height={755}
+          priority
+          unoptimized
+          className="h-8 w-auto sm:h-9"
         />
-        <span className="text-lg font-semibold tracking-tight">SiteRevive</span>
       </Link>
 
       {showNav ? (
         <nav aria-label="Main">
-          <a
-            href="#how-it-works"
-            className="rounded-md text-sm font-medium text-white/70 transition-colors outline-none hover:text-white focus-visible:ring-3 focus-visible:ring-white/50"
-          >
+          <a href="#how-it-works" className="cv-link text-sm font-medium">
             How it works
           </a>
         </nav>

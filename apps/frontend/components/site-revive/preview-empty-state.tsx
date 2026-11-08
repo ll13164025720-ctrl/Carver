@@ -8,10 +8,10 @@ import { cn } from "@/lib/utils"
 export function PreviewEmptyState() {
   return (
     <main className="mx-auto flex w-full max-w-xl flex-1 flex-col justify-center px-6 py-16">
-      <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
+      <h1 className="cv-heading text-3xl text-balance sm:text-5xl">
         There&apos;s no preview to show yet
       </h1>
-      <p className="mt-4 text-lg leading-8 text-white/70">
+      <p className="mt-4 text-lg leading-8 text-cream/75">
         Previews are kept only for the current browser tab. Enter your website
         address to create a new one.
       </p>
@@ -19,7 +19,7 @@ export function PreviewEmptyState() {
         href="/"
         className={cn(
           buttonVariants({ size: "lg" }),
-          "mt-8 h-12 w-fit rounded-xl bg-violet-600 px-6 text-base font-semibold text-white shadow-lg shadow-violet-600/30 hover:bg-violet-500"
+          "cv-btn cv-btn-primary mt-8 w-fit"
         )}
       >
         Revive a website
