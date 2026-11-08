@@ -14,13 +14,19 @@ import {
   CaptureSiteRequestSchema,
   WebsiteCaptureSchema,
   type WebsiteCapture,
+  type WebsiteCapturePage,
 } from "@siterevive/shared";
 
 const PORT = Number(process.env.PORT ?? 3002);
 const HOST = process.env.HOST ?? "0.0.0.0";
 const ARTIFACT_DIR = resolve(process.cwd(), ".data", "captures");
 const MAX_BODY_BYTES = 16 * 1024;
-const NAVIGATION_TIMEOUT_MS = 14_000;
+const HOME_NAVIGATION_TIMEOUT_MS = 6_500;
+const SUBPAGE_NAVIGATION_TIMEOUT_MS = 3_500;
+const SUBPAGE_CRAWL_BUDGET_MS = 6_500;
+const MAX_CRAWL_PAGES = 8; // Includes the homepage.
+const MAX_CRAWL_CONCURRENCY = 3;
+const MAX_SUBPAGE_TEXT_LENGTH = 6_000;
 const MAX_TEXT_LENGTH = 20_000;
 
 // Block private, loopback, link-local, documentation, multicast and reserved
@@ -157,6 +163,83 @@ type ExtractedPageData = {
   text: string;
 };
 
+type CapturedPageData = ExtractedPageData & { url: string };
+
+const NON_PAGE_FILE_EXTENSION =
+  /\.(?:pdf|docx?|xlsx?|pptx?|zip|rar|7z|png|jpe?g|gif|webp|svg|ico|mp[34]|mov|avi|css|js|mjs|json|xml|txt|woff2?|ttf|eot)$/i;
+
+const ACTION_PATH =
+  /(?:^|\/)(?:logout|log-out|signout|sign-out|delete-account)(?:\/|$)/i;
+
+/**
+ * Convert a discovered anchor into a crawlable same-origin page URL.
+ * Tracking parameters are removed, but meaningful query parameters and SPA
+ * hash routes are retained so pages such as ?page=menu or /#/about are not lost.
+ */
+function normalizeDiscoveredPageUrl(
+  rawUrl: string,
+  baseUrl: string,
+  allowedOrigin: string,
+): string | null {
+  try {
+    const url = new URL(rawUrl, baseUrl);
+    if (
+      (url.protocol !== "http:" && url.protocol !== "https:") ||
+      url.origin !== allowedOrigin ||
+      url.username ||
+      url.password
+    ) {
+      return null;
+    }
+
+    const isHashRoute = /^#!?\//.test(url.hash);
+    if (!isHashRoute) url.hash = "";
+
+    const trackingParameter = /^(?:utm_.+|gclid|fbclid|msclkid|mc_cid|mc_eid|_ga|referrer)$/i;
+    for (const key of Array.from(url.searchParams.keys())) {
+      if (trackingParameter.test(key)) url.searchParams.delete(key);
+    }
+    if (url.searchParams.toString().length > 300) return null;
+    url.searchParams.sort();
+
+    url.pathname = url.pathname.replace(/\/{2,}/g, "/");
+    if (url.pathname.length > 1) {
+      url.pathname = url.pathname.replace(/\/+$/, "");
+    }
+
+    if (
+      NON_PAGE_FILE_EXTENSION.test(url.pathname) ||
+      ACTION_PATH.test(url.pathname.toLowerCase())
+    ) {
+      return null;
+    }
+
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function enqueueDiscoveredPages(
+  links: Array<{ text: string; url: string }>,
+  baseUrl: string,
+  allowedOrigin: string,
+  seen: Set<string>,
+  queue: string[],
+): void {
+  for (const link of links) {
+    const candidate = normalizeDiscoveredPageUrl(
+      link.url,
+      baseUrl,
+      allowedOrigin,
+    );
+    if (!candidate || seen.has(candidate)) continue;
+    seen.add(candidate);
+    queue.push(candidate);
+    if (queue.length >= 100) return;
+  }
+}
+
 async function extractPageData(
   page: Page,
   maxLength: number,
@@ -265,12 +348,12 @@ async function captureWebsite(sourceUrl: string): Promise<WebsiteCapture> {
     await context.route("**/*", routeOnlyPublicHttpRequests);
 
     const page = await context.newPage();
-    page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
+    page.setDefaultNavigationTimeout(HOME_NAVIGATION_TIMEOUT_MS);
     page.setDefaultTimeout(4_000);
 
     const navigation = await page.goto(normalizedUrl.toString(), {
       waitUntil: "domcontentloaded",
-      timeout: NAVIGATION_TIMEOUT_MS,
+      timeout: HOME_NAVIGATION_TIMEOUT_MS,
     });
     if (!navigation || !navigation.ok()) {
       const status = navigation?.status();
@@ -281,19 +364,20 @@ async function captureWebsite(sourceUrl: string): Promise<WebsiteCapture> {
       );
     }
 
-    // Some sites continue loading analytics forever. A short network-idle wait
-    // improves screenshots without making the capture depend on every request.
     await page
-      .waitForLoadState("networkidle", { timeout: 1_500 })
+      .waitForLoadState("networkidle", { timeout: 700 })
       .catch(() => undefined);
 
-    const pageData = await extractPageData(page, MAX_TEXT_LENGTH);
+    const homepageData = await extractPageData(page, MAX_TEXT_LENGTH);
+    const finalUrl = page.url();
+    const allowedOrigin = new URL(finalUrl).origin;
 
+    // Keep the before-preview screenshots tied to the homepage.
     await page.screenshot({
       path: desktopPath,
       fullPage: true,
       animations: "disabled",
-      timeout: 4_000,
+      timeout: 2_000,
     });
 
     await page.setViewportSize({ width: 390, height: 844 });
@@ -301,23 +385,154 @@ async function captureWebsite(sourceUrl: string): Promise<WebsiteCapture> {
       path: mobilePath,
       fullPage: true,
       animations: "disabled",
-      timeout: 4_000,
+      timeout: 2_000,
     });
 
-    const finalUrl = page.url();
+    const pages: CapturedPageData[] = [
+      {
+        url: finalUrl,
+        ...homepageData,
+        text: homepageData.text.slice(0, 8_000),
+      },
+    ];
+
+    // Crawl discovered same-origin pages breadth-first. Page count,
+    // concurrency, and time budget keep large navigation trees bounded.
+    const seen = new Set<string>();
+    const homepageKey = normalizeDiscoveredPageUrl(
+      finalUrl,
+      finalUrl,
+      allowedOrigin,
+    );
+    if (homepageKey) seen.add(homepageKey);
+
+    const queue: string[] = [];
+    enqueueDiscoveredPages(
+      homepageData.links,
+      finalUrl,
+      allowedOrigin,
+      seen,
+      queue,
+    );
+
+    const crawlDeadline = Date.now() + SUBPAGE_CRAWL_BUDGET_MS;
+
+    const captureSubpage = async (
+      targetUrl: string,
+    ): Promise<CapturedPageData | null> => {
+      let subpage: Page | undefined;
+      try {
+        subpage = await context.newPage();
+        const remainingMs = crawlDeadline - Date.now();
+        if (remainingMs <= 500) return null;
+
+        const timeout = Math.min(
+          SUBPAGE_NAVIGATION_TIMEOUT_MS,
+          remainingMs - 100,
+        );
+        subpage.setDefaultNavigationTimeout(timeout);
+        subpage.setDefaultTimeout(3_500);
+
+        const result = await subpage.goto(targetUrl, {
+          waitUntil: "domcontentloaded",
+          timeout,
+        });
+
+        if (!result || !result.ok()) return null;
+
+        const resolvedUrl = new URL(subpage.url());
+        // A same-origin link may redirect elsewhere. Do not crawl that site.
+        if (resolvedUrl.origin !== allowedOrigin) return null;
+
+        await subpage
+          .waitForLoadState("networkidle", { timeout: 300 })
+          .catch(() => undefined);
+
+        const data = await extractPageData(
+          subpage,
+          MAX_SUBPAGE_TEXT_LENGTH,
+        );
+
+        return {
+          url: resolvedUrl.toString(),
+          ...data,
+          text: data.text.slice(0, MAX_SUBPAGE_TEXT_LENGTH),
+        };
+      } catch {
+        // A failed subpage should not discard a successful homepage capture.
+        return null;
+      } finally {
+        await subpage?.close().catch(() => undefined);
+      }
+    };
+
+    while (
+      queue.length > 0 &&
+      pages.length < MAX_CRAWL_PAGES &&
+      Date.now() < crawlDeadline
+    ) {
+      const capacity = MAX_CRAWL_PAGES - pages.length;
+      const batch = queue.splice(
+        0,
+        Math.min(MAX_CRAWL_CONCURRENCY, capacity),
+      );
+
+      const results = await Promise.all(batch.map(captureSubpage));
+
+      for (const capturedPage of results) {
+        if (!capturedPage || pages.length >= MAX_CRAWL_PAGES) continue;
+        pages.push(capturedPage);
+        enqueueDiscoveredPages(
+          capturedPage.links,
+          capturedPage.url,
+          allowedOrigin,
+          seen,
+          queue,
+        );
+      }
+    }
+
     await context.close();
+
+    // Keep homepage-oriented fields for older clients, while aggregating useful
+    // content from all captured pages for the AI prompt.
+    const allHeadings = pages
+      .flatMap((capturedPage) => capturedPage.headings)
+      .slice(0, 100);
+    const allLinks = Array.from(
+      new Map(
+        pages
+          .flatMap((capturedPage) => capturedPage.links)
+          .map((link) => [link.url, link] as const),
+      ).values(),
+    ).slice(0, 100);
+    const allImages = Array.from(
+      new Map(
+        pages
+          .flatMap((capturedPage) => capturedPage.images)
+          .map((image) => [image.src, image] as const),
+      ).values(),
+    ).slice(0, 100);
+    const allText = pages
+      .map(
+        (capturedPage) =>
+          `PAGE: ${capturedPage.title || capturedPage.url}\nURL: ${capturedPage.url}\n${capturedPage.text}`,
+      )
+      .join("\n\n")
+      .slice(0, MAX_TEXT_LENGTH);
 
     return WebsiteCaptureSchema.parse({
       captureId,
       sourceUrl: normalizedUrl.toString(),
       finalUrl,
       capturedAt: new Date().toISOString(),
-      title: cleanText(pageData.title, 300),
-      description: cleanText(pageData.description, 1000),
-      headings: pageData.headings,
-      text: cleanText(pageData.text, MAX_TEXT_LENGTH),
-      links: pageData.links,
-      images: pageData.images,
+      title: cleanText(homepageData.title, 300),
+      description: cleanText(homepageData.description, 1000),
+      headings: allHeadings,
+      text: cleanText(allText, MAX_TEXT_LENGTH),
+      links: allLinks,
+      images: allImages,
+      pages: pages as WebsiteCapturePage[],
       screenshots: {
         desktop: `/artifacts/${desktopFile}`,
         mobile: `/artifacts/${mobileFile}`,
@@ -337,7 +552,6 @@ async function captureWebsite(sourceUrl: string): Promise<WebsiteCapture> {
     await browser?.close().catch(() => undefined);
   }
 }
-
 async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   let totalBytes = 0;
@@ -455,11 +669,16 @@ const server = createServer(async (request, response) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Capture failed.";
     const status =
-      /valid website URL|HTTP and HTTPS|username|Local and internal|Private or reserved|hostname could not be resolved|resolves to a private/i.test(
-        message,
-      )
-        ? 400
-        : 502;
+      message === "Request body is too large."
+        ? 413
+        : error instanceof SyntaxError ||
+            /valid website URL|HTTP and HTTPS|username|Local and internal|Private or reserved|hostname could not be resolved|resolves to a private/i.test(
+              message,
+            )
+          ? 400
+          : error instanceof Error && error.name === "TimeoutError"
+            ? 504
+            : 502;
     sendJson(response, status, { error: message });
   }
 });
