@@ -110,7 +110,9 @@ async function invokeBedrockJson(
       ],
       inferenceConfig: {
         maxTokens,
-        temperature: 0.2,
+        // Newer Claude models (e.g. Sonnet 5) reject `temperature` ("deprecated
+        // for this model"), so it is only sent to other model families.
+        ...(MODEL_ID.includes("anthropic.") ? {} : { temperature: 0.2 }),
       },
     }),
   );

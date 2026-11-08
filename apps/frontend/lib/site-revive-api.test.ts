@@ -8,6 +8,9 @@ import {
   clearCaptureCache,
   describeApiError,
   editWebsite,
+  fetchLatestProject,
+  fetchVersion,
+  fetchVersionHistory,
   isMockMode,
   isWebsiteDesign,
   redesignWebsite,
@@ -868,5 +871,270 @@ describe("describeApiError", () => {
   it("never puts the technical detail in the message", () => {
     const error = new SiteReviveApiError("server", "Friendly.", { detail: "ExpiredTokenException" })
     assert.equal(describeApiError(error, "fallback"), "Friendly.")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Projects and versions (the backend keeps one project per redesign)
+// ---------------------------------------------------------------------------
+
+const PROJECT = "69112fc8-f065-40e3-a706-99a23e69a8ad"
+
+const PROJECT_CAPTURE_REPLY = (): Reply => ({
+  json: { ok: true, projectId: PROJECT, capture: makeCapture(), sourceContent: '{"title":"x"}' },
+})
+const SAVED_GENERATE_REPLY = (versionNumber = 1): Reply => ({
+  json: { ok: true, projectId: PROJECT, versionNumber, blueprint: makeBlueprint() },
+})
+
+describe("one redesign, one project (api mode)", () => {
+  beforeEach(setApiMode)
+
+  it("generates under the project the capture created and keeps its id and version", async () => {
+    installFetch(({ path }) => (path === "/api/captures" ? PROJECT_CAPTURE_REPLY() : SAVED_GENERATE_REPLY()))
+    const result = await redesignWebsite(SITE)
+
+    assert.equal(calls[1].body.projectId, PROJECT)
+    assert.equal(result.projectId, PROJECT)
+    assert.equal(result.versionNumber, 1)
+    assert.equal(calls.filter((call) => call.path === "/api/captures").length, 1)
+  })
+
+  it("still works with a backend that returns no project id", async () => {
+    installFetch(happyBackend)
+    const result = await redesignWebsite(SITE)
+    assert.equal("projectId" in calls[1].body, false)
+    assert.equal(result.projectId, WORKER_ID)
+    assert.equal(result.versionNumber, undefined)
+  })
+
+  it("ignores a project id that is not a UUID", async () => {
+    installFetch(({ path }) =>
+      path === "/api/captures"
+        ? { json: { ok: true, projectId: "../../etc/passwd", capture: makeCapture() } }
+        : { json: { ok: true, projectId: "nope", versionNumber: 0, blueprint: makeBlueprint() } }
+    )
+    const result = await redesignWebsite(SITE)
+    assert.equal("projectId" in calls[1].body, false)
+    assert.equal(result.projectId, WORKER_ID)
+    assert.equal(result.versionNumber, undefined)
+  })
+
+  it("retries the AI step under the same project instead of creating another", async () => {
+    let fail = true
+    installFetch(({ path }) =>
+      path === "/api/captures"
+        ? PROJECT_CAPTURE_REPLY()
+        : fail ? { status: 502, json: { error: "Throttled" } } : SAVED_GENERATE_REPLY()
+    )
+    await rejection(redesignWebsite(SITE))
+    fail = false
+    const result = await redesignWebsite(SITE)
+
+    assert.equal(calls.filter((call) => call.path === "/api/captures").length, 1, "one capture, so one project")
+    assert.deepEqual(
+      calls.filter((call) => call.path.endsWith("/generate")).map((call) => call.body.projectId),
+      [PROJECT, PROJECT]
+    )
+    assert.equal(result.projectId, PROJECT)
+  })
+
+  it("starts over with a fresh capture when the backend says the project is already generated", async () => {
+    installFetch(({ path }) =>
+      path === "/api/captures"
+        ? PROJECT_CAPTURE_REPLY()
+        : { status: 409, json: { error: "This project already has a generated Blueprint.", latestVersion: 1 } }
+    )
+    const error = await rejection(redesignWebsite(SITE))
+    assert.equal(error.code, "conflict")
+    assert.equal(error.retryable, true)
+
+    await rejection(redesignWebsite(SITE))
+    assert.equal(calls.filter((call) => call.path === "/api/captures").length, 2, "a fresh capture and project")
+  })
+})
+
+describe("saved versions: editing (api mode)", () => {
+  beforeEach(setApiMode)
+
+  async function savedProject() {
+    installFetch(({ path }) => (path === "/api/captures" ? PROJECT_CAPTURE_REPLY() : SAVED_GENERATE_REPLY()))
+    const result = await redesignWebsite(SITE)
+    calls = []
+    assert.ok(result.blueprint && result.versionNumber)
+    return { result, blueprint: result.blueprint, versionNumber: result.versionNumber }
+  }
+
+  const editedBlueprint = (blueprint: WebsiteBlueprint, headline: string) => {
+    const copy = structuredClone(blueprint)
+    copy.sections.find((section) => section.id === "hero-main")!.content.headline = headline
+    return copy
+  }
+
+  it("sends the project and the version the edit is based on", async () => {
+    const { result, blueprint, versionNumber } = await savedProject()
+    installFetch(() => ({
+      json: { ok: true, projectId: PROJECT, versionNumber: 2, blueprint: editedBlueprint(blueprint, "New"), operations: [] },
+    }))
+    const outcome = await editWebsite({
+      projectId: result.projectId, prompt: "Change the headline", currentDesign: result.design,
+      blueprint, versionNumber, capture: result.capture,
+    })
+
+    assert.equal(calls[0].body.projectId, PROJECT)
+    assert.equal(calls[0].body.baseVersion, 1)
+    assert.deepEqual(Object.keys(calls[0].body).sort(), ["baseVersion", "blueprint", "projectId", "prompt"])
+    assert.equal(outcome.versionNumber, 2)
+    assert.equal(outcome.design.hero.headline, "New")
+  })
+
+  it("builds each edit on the version the previous edit produced", async () => {
+    const { result, blueprint } = await savedProject()
+    let version = 1
+    installFetch(() => {
+      version += 1
+      return { json: { ok: true, projectId: PROJECT, versionNumber: version, blueprint: editedBlueprint(blueprint, `v${version}`), operations: [] } }
+    })
+    let current = { design: result.design, blueprint, versionNumber: 1 }
+    for (let i = 0; i < 3; i += 1) {
+      const outcome = await editWebsite({ projectId: PROJECT, prompt: "x", currentDesign: current.design, ...current, capture: result.capture })
+      current = { design: outcome.design, blueprint: outcome.blueprint!, versionNumber: outcome.versionNumber! }
+    }
+    assert.deepEqual(calls.map((call) => call.body.baseVersion), [1, 2, 3])
+    assert.equal(current.versionNumber, 4)
+  })
+
+  it("stays stateless (no project, no version) when the version is unknown", async () => {
+    const { result, blueprint } = await savedProject()
+    installFetch(() => ({ json: { ok: true, blueprint: editedBlueprint(blueprint, "New"), operations: [] } }))
+    const outcome = await editWebsite({
+      projectId: result.projectId, prompt: "x", currentDesign: result.design, blueprint, capture: result.capture,
+    })
+    assert.deepEqual(Object.keys(calls[0].body).sort(), ["blueprint", "prompt"])
+    assert.equal(outcome.versionNumber, undefined)
+  })
+
+  it("never trusts a version number the backend did not send for a versioned edit", async () => {
+    const { result, blueprint, versionNumber } = await savedProject()
+    installFetch(() => ({ json: { ok: true, versionNumber: -3, blueprint: editedBlueprint(blueprint, "New"), operations: [] } }))
+    const outcome = await editWebsite({
+      projectId: PROJECT, prompt: "x", currentDesign: result.design, blueprint, versionNumber, capture: result.capture,
+    })
+    assert.equal(outcome.versionNumber, undefined)
+  })
+
+  it("reports an edit made on an outdated version as a conflict, with the newest version", async () => {
+    const { result, blueprint, versionNumber } = await savedProject()
+    installFetch(() => ({
+      status: 409,
+      json: { error: "This Blueprint is outdated. Load the latest version before editing.", latestVersion: 4 },
+    }))
+    const error = await rejection(editWebsite({
+      projectId: PROJECT, prompt: "x", currentDesign: result.design, blueprint, versionNumber,
+    }))
+    assert.equal(error.code, "conflict")
+    assert.equal(error.latestVersion, 4)
+    assert.equal(error.status, 409)
+    assert.match(error.message, /changed in another window/i)
+    assert.doesNotMatch(error.message, /Blueprint/)
+  })
+
+  it("explains a project that no longer exists", async () => {
+    const { result, blueprint, versionNumber } = await savedProject()
+    installFetch(() => ({ status: 404, json: { error: "Project not found." } }))
+    const error = await rejection(editWebsite({
+      projectId: PROJECT, prompt: "x", currentDesign: result.design, blueprint, versionNumber,
+    }))
+    assert.equal(error.code, "not_found")
+    assert.match(error.message, /no longer available/i)
+  })
+})
+
+describe("saved versions: reading (api mode)", () => {
+  beforeEach(setApiMode)
+
+  const history = {
+    ok: true,
+    projectId: PROJECT,
+    versions: [
+      { versionId: "v000001", versionNumber: 1, changeType: "INITIAL", createdAt: "2026-11-08T00:00:00.000Z" },
+      { versionId: "v000003", versionNumber: 3, changeType: "EDIT", prompt: "  Change   the headline\n to Hi  ", createdAt: "2026-11-08T00:02:00.000Z" },
+      { versionId: "v000002", versionNumber: 2, changeType: "EDIT", prompt: "Shorter about", createdAt: "2026-11-08T00:01:00.000Z" },
+      { versionNumber: "bad" },
+      null,
+    ],
+  }
+
+  it("lists the versions newest first, skipping malformed entries and tidying prompts", async () => {
+    installFetch(() => ({ json: history }))
+    const versions = await fetchVersionHistory(PROJECT)
+
+    assert.equal(calls[0].url, `${API}/api/projects/${PROJECT}/versions`)
+    assert.equal(calls[0].init.method, "GET")
+    assert.equal(calls[0].init.body, undefined)
+    assert.deepEqual(versions.map((v) => [v.versionNumber, v.changeType]), [[3, "EDIT"], [2, "EDIT"], [1, "INITIAL"]])
+    assert.equal(versions[0].prompt, "Change the headline to Hi")
+    assert.equal(versions[2].prompt, undefined)
+  })
+
+  it("loads one version and converts it with the stored capture", async () => {
+    installFetch(() => ({ json: { ok: true, projectId: PROJECT, versionNumber: 1, blueprint: makeBlueprint() } }))
+    const saved = await fetchVersion(PROJECT, 1, makeCapture())
+    assert.equal(calls[0].url, `${API}/api/projects/${PROJECT}/versions/1`)
+    assert.equal(saved.versionNumber, 1)
+    assert.ok(isWebsiteDesign(saved.design))
+    assert.equal(saved.design.hero.image.src, "https://joescafe.com/photos/front.jpg")
+  })
+
+  it("loads the latest state of a project", async () => {
+    installFetch(() => ({
+      json: { ok: true, project: { projectId: PROJECT, latestVersion: 5 }, blueprint: makeBlueprint() },
+    }))
+    const saved = await fetchLatestProject(PROJECT, makeCapture())
+    assert.equal(calls[0].url, `${API}/api/projects/${PROJECT}`)
+    assert.equal(saved.versionNumber, 5)
+    assert.ok(isWebsiteDesign(saved.design))
+  })
+
+  it("rejects unreadable answers", async () => {
+    installFetch(() => ({ json: { ok: true, project: { latestVersion: 0 }, blueprint: makeBlueprint() } }))
+    assert.equal((await rejection(fetchLatestProject(PROJECT))).code, "invalid_response")
+    installFetch(() => ({ json: { ok: true, project: { latestVersion: 2 }, blueprint: null } }))
+    assert.equal((await rejection(fetchLatestProject(PROJECT))).code, "invalid_response")
+    installFetch(() => ({ json: { ok: true } }))
+    assert.equal((await rejection(fetchVersionHistory(PROJECT))).code, "invalid_response")
+    installFetch(() => ({ json: { ok: true, blueprint: { nope: 1 } } }))
+    assert.equal((await rejection(fetchVersion(PROJECT, 1))).code, "invalid_response")
+  })
+
+  it("maps backend failures to plain messages", async () => {
+    installFetch(() => ({ status: 404, json: { error: "Project not found." } }))
+    const gone = await rejection(fetchVersionHistory(PROJECT))
+    assert.equal(gone.code, "not_found")
+    assert.match(gone.message, /no longer available/i)
+
+    installFetch(() => ({ status: 500, json: { error: "Unable to retrieve version history." } }))
+    const broken = await rejection(fetchVersionHistory(PROJECT))
+    assert.equal(broken.code, "server")
+    assert.match(broken.message, /version history/i)
+  })
+
+  it("never builds a URL from an id that is not a UUID, and sends nothing", async () => {
+    installFetch(() => ({ json: history }))
+    for (const id of ["../admin", "a/b", "", "69112fc8", `${PROJECT}/versions`]) {
+      assert.equal((await rejection(fetchVersionHistory(id))).code, "not_found", id)
+      assert.equal((await rejection(fetchLatestProject(id))).code, "not_found", id)
+    }
+    for (const n of [0, -1, 1.5, NaN]) {
+      assert.equal((await rejection(fetchVersion(PROJECT, n))).code, "not_found", String(n))
+    }
+    assert.equal(calls.length, 0)
+  })
+
+  it("is not available in demo mode, and sends nothing", async () => {
+    setEnvironment({ mode: "mock" })
+    installFetch(() => ({ json: history }))
+    assert.equal((await rejection(fetchVersionHistory(PROJECT))).code, "config")
+    assert.equal(calls.length, 0)
   })
 })

@@ -44,14 +44,23 @@ import type { RedesignResult, WebsiteDesign } from "@/types/website"
  * ---------------------------------------------------------------------------
  *   POST /api/captures
  *     request   { sourceUrl }
- *     200 body  { ok: true, capture, sourceContent }
+ *     200 body  { ok: true, projectId, capture, sourceContent, screenshotKeys }
  *   POST /api/blueprints/generate
- *     request   { businessName, businessType?, description?, sourceUrl?, sourceContent? }
- *     200 body  { ok: true, blueprint }
+ *     request   { projectId?, businessName, businessType?, description?, sourceUrl?, sourceContent? }
+ *     200 body  { ok: true, projectId, versionNumber, blueprint }
  *   POST /api/blueprints/edit
- *     request   { blueprint, prompt }          (the backend keeps no state)
- *     200 body  { ok: true, blueprint, operations }
- *   Errors      non-2xx with { error: "<message>", details? }
+ *     request   { projectId?, baseVersion?, blueprint, prompt }
+ *     200 body  { ok: true, projectId?, versionNumber?, blueprint, operations }
+ *   GET  /api/projects/{projectId}                      latest blueprint
+ *   GET  /api/projects/{projectId}/versions             history list
+ *   GET  /api/projects/{projectId}/versions/{number}    one saved blueprint
+ *   Errors      non-2xx with { error: "<message>", details?, latestVersion? }
+ *
+ * One redesign is one project. The capture creates it, generate adds version 1
+ * to it, and every edit adds the next version. Edits send `baseVersion`, and
+ * the backend answers 409 if a newer version exists (for example after an edit
+ * in another tab). Without a projectId the backend still works statelessly, and
+ * this client falls back to that for backends that do not return one.
  *
  * A redesign is two sequential calls, capture then generate. Each is bounded
  * by the backend (the capture worker gives up after 28 s, the Lambda after
@@ -70,6 +79,8 @@ export interface CaptureRequest {
 
 /** Body of POST /api/blueprints/generate. */
 export interface GenerateBlueprintRequest {
+  /** The project created by /api/captures. Keeps the redesign under that project. */
+  projectId?: string
   businessName: string
   businessType?: string
   description?: string
@@ -79,6 +90,10 @@ export interface GenerateBlueprintRequest {
 
 /** Body of POST /api/blueprints/edit. */
 export interface EditBlueprintRequest {
+  /** With `baseVersion`, makes the backend load, check and save versions for this project. */
+  projectId?: string
+  /** The version this edit is based on. The backend refuses it if a newer one exists. */
+  baseVersion?: number
   blueprint: WebsiteBlueprint
   prompt: string
 }
@@ -93,6 +108,8 @@ export interface EditInput {
   currentDesign: WebsiteDesign
   /** The blueprint behind `currentDesign`. Required in "api" mode, unused in "mock" mode. */
   blueprint?: WebsiteBlueprint
+  /** The saved version of `blueprint`. When set, the edit is saved as the next version. */
+  versionNumber?: number
   /** The capture stored with the project. Optional. */
   capture?: WebsiteCapture
 }
@@ -102,6 +119,8 @@ export interface EditOutcome {
   design: WebsiteDesign
   /** The updated blueprint to store for the next edit. Absent in mock mode. */
   blueprint?: WebsiteBlueprint
+  /** The version the backend saved this edit as. Absent in mock mode or without versioning. */
+  versionNumber?: number
   /**
    * False when nothing visible changed: in mock mode the design already matched,
    * in api mode the backend only changed details the preview does not show.
@@ -136,6 +155,8 @@ export const CAPTURE_TIMEOUT_MS = 45_000
 export const GENERATE_TIMEOUT_MS = 60_000
 /** One Bedrock call that returns a few edit operations. */
 export const EDIT_TIMEOUT_MS = 45_000
+/** Reading saved data: no model call, so it should be quick. */
+export const HISTORY_TIMEOUT_MS = 20_000
 
 /** Example instructions the real backend can follow (text edits inside sections). */
 export const API_EDIT_EXAMPLES: readonly string[] = [
@@ -161,6 +182,8 @@ export type SiteReviveApiErrorCode =
   | "not_found"
   /** HTTP 429. */
   | "rate_limited"
+  /** HTTP 409: the project has a newer version than the edit was based on. */
+  | "conflict"
   /** HTTP 5xx or another unexpected status. */
   | "server"
   /** 2xx, but the body is not the agreed shape. */
@@ -179,11 +202,19 @@ export class SiteReviveApiError extends Error {
    * it to users: it can mention internals such as AWS or Playwright errors.
    */
   readonly detail?: string
+  /** On a "conflict": the newest saved version number, as reported by the backend. */
+  readonly latestVersion?: number
 
   constructor(
     code: SiteReviveApiErrorCode,
     message: string,
-    options: { status?: number; retryable?: boolean; cause?: unknown; detail?: string } = {}
+    options: {
+      status?: number
+      retryable?: boolean
+      cause?: unknown
+      detail?: string
+      latestVersion?: number
+    } = {}
   ) {
     super(message, { cause: options.cause })
     this.name = "SiteReviveApiError"
@@ -191,6 +222,7 @@ export class SiteReviveApiError extends Error {
     this.status = options.status
     this.retryable = options.retryable ?? false
     this.detail = options.detail
+    this.latestVersion = options.latestVersion
   }
 }
 
@@ -377,7 +409,7 @@ function invalidResponse(what: string, detail?: string): SiteReviveApiError {
 // HTTP
 // ---------------------------------------------------------------------------
 
-type Operation = "capture" | "generate" | "edit"
+type Operation = "capture" | "generate" | "edit" | "history"
 
 /** Message from { error: "..." }, { error: { message } } or { detail: "..." }, if present. */
 function serverMessage(text: string): string | null {
@@ -418,8 +450,23 @@ const TEXT = {
   editFailed:
     "We couldn't apply that change. Try rephrasing it, for example: Change the hero headline to Welcome.",
   editRejected: "That instruction couldn't be accepted. Try a shorter or clearer one.",
+  editConflict:
+    "This design was changed in another window, so your edit was not applied. We loaded the latest version. Please enter your change again.",
+  projectGone: "This project is no longer available. Start a new redesign.",
+  historyFailed: "We couldn't load the version history. Please try again.",
   editTimeout: "The AI took too long to answer, so we stopped waiting. Please try again.",
 } as const
+
+/** `latestVersion` from a 409 body, if it is a sensible number. */
+function serverLatestVersion(text: string): number | undefined {
+  try {
+    const body: unknown = JSON.parse(text)
+    const value = isObj(body) ? body.latestVersion : undefined
+    return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 ? value : undefined
+  } catch {
+    return undefined
+  }
+}
 
 function httpError(status: number, text: string, operation: Operation): SiteReviveApiError {
   const detail = serverMessage(text) ?? undefined
@@ -428,6 +475,15 @@ function httpError(status: number, text: string, operation: Operation): SiteRevi
   )
   const base = { status, detail }
 
+  if (status === 409) {
+    return new SiteReviveApiError(
+      "conflict",
+      operation === "edit"
+        ? TEXT.editConflict
+        : "This website was already redesigned. Please try again to start a fresh redesign.",
+      { ...base, retryable: operation !== "edit", latestVersion: serverLatestVersion(text) }
+    )
+  }
   if (status === 429) {
     return new SiteReviveApiError(
       "rate_limited",
@@ -452,9 +508,12 @@ function httpError(status: number, text: string, operation: Operation): SiteRevi
     )
   }
   if (status === 404) {
+    // The backend says "Project not found." / "Version not found." for a missing
+    // project. Anything else is a missing route or server.
+    const projectMissing = (operation === "edit" || operation === "history") && /not found/i.test(detail ?? "")
     return new SiteReviveApiError(
       "not_found",
-      "The CARVER service could not be found. Please try again later.",
+      projectMissing ? TEXT.projectGone : "The CARVER service could not be found. Please try again later.",
       base
     )
   }
@@ -480,13 +539,18 @@ function httpError(status: number, text: string, operation: Operation): SiteRevi
   }
   return new SiteReviveApiError(
     "server",
-    operation === "generate" ? TEXT.generateFailed : TEXT.editFailed,
+    operation === "generate"
+      ? TEXT.generateFailed
+      : operation === "history"
+        ? TEXT.historyFailed
+        : TEXT.editFailed,
     { ...base, retryable }
   )
 }
 
-/** POSTs JSON and returns the parsed 2xx body. Throws SiteReviveApiError only. */
-async function postJson(
+/** Sends a JSON request and returns the parsed 2xx body. Throws SiteReviveApiError only. */
+async function requestJson(
+  method: "GET" | "POST",
   baseUrl: string,
   path: string,
   body: unknown,
@@ -514,9 +578,12 @@ async function postJson(
     let text: string
     try {
       response = await fetch(`${baseUrl}${path}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify(body),
+        method,
+        headers:
+          method === "POST"
+            ? { "Content-Type": "application/json", Accept: "application/json" }
+            : { Accept: "application/json" },
+        ...(method === "POST" ? { body: JSON.stringify(body) } : {}),
         // No cookies or auth headers: nothing secret is sent from the browser.
         credentials: "omit",
         cache: "no-store",
@@ -572,6 +639,8 @@ const CAPTURE_CACHE_TTL_MS = 10 * 60 * 1000
 const CAPTURE_CACHE_MAX_ENTRIES = 5
 
 interface CapturedPage {
+  /** The project the backend created for this capture. Absent on backends that do not keep projects. */
+  projectId?: string
   capture: WebsiteCapture
   /** Preformatted page content for /api/blueprints/generate. */
   sourceContent?: string
@@ -607,6 +676,17 @@ export function clearCaptureCache(): void {
 // Redesign
 // ---------------------------------------------------------------------------
 
+/** The backend creates project ids with randomUUID(). Anything else is ignored. */
+const PROJECT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function validProjectId(value: unknown): string | undefined {
+  return typeof value === "string" && PROJECT_ID.test(value) ? value : undefined
+}
+
+function validVersionNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 ? value : undefined
+}
+
 const MAX_SOURCE_URL_LENGTH = 2048
 const MAX_DESCRIPTION_LENGTH = 1000
 const MAX_SOURCE_CONTENT_LENGTH = 12_000
@@ -617,7 +697,8 @@ async function captureWebsite(
   options: RedesignOptions
 ): Promise<CapturedPage> {
   const request: CaptureRequest = { sourceUrl: url }
-  const body = await postJson(
+  const body = await requestJson(
+    "POST",
     config.baseUrl,
     "/api/captures",
     request,
@@ -630,6 +711,7 @@ async function captureWebsite(
   if (!parsed.ok) throw invalidResponse("page capture", parsed.error)
 
   return {
+    projectId: isObj(body) ? validProjectId(body.projectId) : undefined,
     capture: parsed.value,
     sourceContent:
       isObj(body) && typeof body.sourceContent === "string" && body.sourceContent.trim()
@@ -693,35 +775,52 @@ export async function redesignWebsite(
     page = await captureWebsite(config, url, options)
     rememberCapture(url, page)
   }
-  const { capture, sourceContent } = page
+  const { capture, sourceContent, projectId } = page
 
   // 2. Generate. The business name is a guess from the page title or domain.
   options.onStage?.("designing")
   const description = capture.description.trim().slice(0, MAX_DESCRIPTION_LENGTH)
   const request: GenerateBlueprintRequest = {
+    // Keeps the redesign under the project the capture created.
+    ...(projectId ? { projectId } : {}),
     businessName: deriveBusinessName(capture.title, capture.finalUrl || url),
     ...(description ? { description } : {}),
     ...(url.length <= MAX_SOURCE_URL_LENGTH ? { sourceUrl: url } : {}),
     ...(sourceContent ? { sourceContent: sourceContent.slice(0, MAX_SOURCE_CONTENT_LENGTH) } : {}),
   }
-  const body = await postJson(
-    config.baseUrl,
-    "/api/blueprints/generate",
-    request,
-    "generate",
-    options.timeoutMs ?? GENERATE_TIMEOUT_MS,
-    options.signal
-  )
+  let body: unknown
+  try {
+    body = await requestJson(
+      "POST",
+      config.baseUrl,
+      "/api/blueprints/generate",
+      request,
+      "generate",
+      options.timeoutMs ?? GENERATE_TIMEOUT_MS,
+      options.signal
+    )
+  } catch (error) {
+    // 409: this capture's project already has its first version (a previous
+    // attempt succeeded but its answer never arrived). Retrying must start from
+    // a fresh capture and project, so forget this one.
+    if (error instanceof SiteReviveApiError && error.code === "conflict") captureCache.delete(url)
+    throw error
+  }
 
   // 3. Convert. The adapter validates the blueprint and fills any gaps.
   const adapted = adaptBlueprint(isObj(body) ? body.blueprint : undefined, capture)
   if (!adapted.ok) throw invalidResponse("website design", adapted.error)
 
   captureCache.delete(url)
+  // Prefer the project id the backend confirms; fall back to the one from the
+  // capture, then to the capture id for backends that keep no projects.
+  const savedProjectId = isObj(body) ? validProjectId(body.projectId) : undefined
+  const versionNumber = isObj(body) ? validVersionNumber(body.versionNumber) : undefined
   return {
-    projectId: capture.captureId,
+    projectId: savedProjectId ?? projectId ?? capture.captureId,
     originalScreenshotUrl: screenshotUrlFor(capture, config),
     design: adapted.value.design,
+    ...(versionNumber ? { versionNumber } : {}),
     blueprint: adapted.value.blueprint,
     capture: compactCapture(capture),
   }
@@ -806,8 +905,17 @@ export async function editWebsite(
   }
 
   // Explicit fields: the design and capture must never reach the network.
-  const request: EditBlueprintRequest = { blueprint: input.blueprint, prompt }
-  const body = await postJson(
+  // projectId + baseVersion make the backend save this edit as the next version
+  // and refuse it if the project has moved on. Both are sent together, only
+  // when this project's versions are known (otherwise the edit is stateless).
+  const versioned = validProjectId(input.projectId) !== undefined && input.versionNumber !== undefined
+  const request: EditBlueprintRequest = {
+    ...(versioned ? { projectId: input.projectId, baseVersion: input.versionNumber } : {}),
+    blueprint: input.blueprint,
+    prompt,
+  }
+  const body = await requestJson(
+    "POST",
     config.baseUrl,
     "/api/blueprints/edit",
     request,
@@ -821,12 +929,124 @@ export async function editWebsite(
 
   const { design, blueprint } = adapted.value
   const changed = JSON.stringify(design) !== JSON.stringify(input.currentDesign)
+  const savedVersion = versioned && isObj(body) ? validVersionNumber(body.versionNumber) : undefined
   return {
     design,
     blueprint,
+    ...(savedVersion ? { versionNumber: savedVersion } : {}),
     changed,
     summary: changed
       ? describeOperations(isObj(body) ? body.operations : undefined, blueprint.sections)
       : NOT_VISIBLE_SUMMARY,
   }
+}
+
+// ---------------------------------------------------------------------------
+// Saved projects and version history
+// ---------------------------------------------------------------------------
+
+/** A project's state as saved by the backend. */
+export interface SavedProject {
+  design: WebsiteDesign
+  blueprint: WebsiteBlueprint
+  versionNumber: number
+}
+
+/** One entry of a project's version history. */
+export interface VersionSummary {
+  versionNumber: number
+  /** "INITIAL" for the first redesign, "EDIT" for a prompt edit. */
+  changeType: "INITIAL" | "EDIT"
+  /** The instruction that created an EDIT version. Untrusted text: show it as text only. */
+  prompt?: string
+  /** ISO timestamp. */
+  createdAt: string
+}
+
+function apiConfigOrThrow(): Extract<ApiConfig, { mode: "api" }> {
+  const config = resolveConfig()
+  if (config.mode !== "api") {
+    throw new SiteReviveApiError(
+      "config",
+      "Version history needs the real backend. It is not available in demo mode."
+    )
+  }
+  return config
+}
+
+function projectPath(projectId: string): string {
+  const id = validProjectId(projectId)
+  if (!id) throw new SiteReviveApiError("not_found", TEXT.projectGone)
+  return `/api/projects/${id}`
+}
+
+/**
+ * Loads the newest saved version of a project and converts it. Used to catch up
+ * after another window edited the same project.
+ */
+export async function fetchLatestProject(
+  projectId: string,
+  capture?: WebsiteCapture,
+  options: RequestOptions = {}
+): Promise<SavedProject> {
+  const config = apiConfigOrThrow()
+  const body = await requestJson(
+    "GET", config.baseUrl, projectPath(projectId), undefined, "history",
+    options.timeoutMs ?? HISTORY_TIMEOUT_MS, options.signal
+  )
+  const versionNumber =
+    isObj(body) && isObj(body.project) ? validVersionNumber(body.project.latestVersion) : undefined
+  const adapted = adaptBlueprint(isObj(body) ? body.blueprint : undefined, capture)
+  if (!versionNumber || !adapted.ok) {
+    throw invalidResponse("saved project", adapted.ok ? "no version number" : adapted.error)
+  }
+  return { design: adapted.value.design, blueprint: adapted.value.blueprint, versionNumber }
+}
+
+/** The project's versions, newest first. */
+export async function fetchVersionHistory(
+  projectId: string,
+  options: RequestOptions = {}
+): Promise<VersionSummary[]> {
+  const config = apiConfigOrThrow()
+  const body = await requestJson(
+    "GET", config.baseUrl, `${projectPath(projectId)}/versions`, undefined, "history",
+    options.timeoutMs ?? HISTORY_TIMEOUT_MS, options.signal
+  )
+  if (!isObj(body) || !Array.isArray(body.versions)) throw invalidResponse("version list")
+
+  const versions: VersionSummary[] = []
+  for (const entry of body.versions) {
+    const versionNumber = isObj(entry) ? validVersionNumber(entry.versionNumber) : undefined
+    if (!isObj(entry) || !versionNumber) continue
+    const changeType = entry.changeType === "EDIT" ? "EDIT" : "INITIAL"
+    const prompt = typeof entry.prompt === "string" ? entry.prompt.replace(/\s+/g, " ").trim().slice(0, 300) : ""
+    versions.push({
+      versionNumber,
+      changeType,
+      ...(prompt ? { prompt } : {}),
+      createdAt: typeof entry.createdAt === "string" ? entry.createdAt : "",
+    })
+  }
+  return versions.sort((a, b) => b.versionNumber - a.versionNumber)
+}
+
+/** One saved version, converted for display. */
+export async function fetchVersion(
+  projectId: string,
+  versionNumber: number,
+  capture?: WebsiteCapture,
+  options: RequestOptions = {}
+): Promise<SavedProject> {
+  const config = apiConfigOrThrow()
+  if (validVersionNumber(versionNumber) === undefined) {
+    throw new SiteReviveApiError("not_found", "That version does not exist.")
+  }
+  const body = await requestJson(
+    "GET", config.baseUrl, `${projectPath(projectId)}/versions/${versionNumber}`, undefined,
+    "history", options.timeoutMs ?? HISTORY_TIMEOUT_MS, options.signal
+  )
+  const adapted = adaptBlueprint(isObj(body) ? body.blueprint : undefined, capture)
+  if (!adapted.ok) throw invalidResponse("saved version", adapted.error)
+  return { design: adapted.value.design, blueprint: adapted.value.blueprint, versionNumber }
 }

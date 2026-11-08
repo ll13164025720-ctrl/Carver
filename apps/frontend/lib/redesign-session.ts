@@ -8,9 +8,10 @@ import type { RedesignResult } from "@/types/website"
  * is cleared when the tab closes, so a user's URL is not kept around.
  *
  * Besides the design, a real-backend project stores the blueprint the design
- * was built from (prompt edits send it back to the backend) and the page
- * capture (needed to rebuild the design after an edit). The sample project
- * has neither.
+ * was built from (prompt edits send it back to the backend), the saved version
+ * number it corresponds to (sent back as `baseVersion` so the backend can refuse
+ * an edit made on an outdated version) and the page capture (needed to rebuild
+ * the design after an edit). The sample project has none of these.
  *
  * A project remembers the mode it was created in and is ignored in the other
  * one, so switching between "mock" and "api" can never show a sample result as
@@ -59,6 +60,12 @@ function restoreProject(value: unknown): StoredProject | null {
     projectId: result.projectId,
     originalScreenshotUrl: result.originalScreenshotUrl,
     design: result.design,
+  }
+
+  if (result.versionNumber !== undefined) {
+    const version = result.versionNumber
+    if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 1) return null
+    restored.versionNumber = version
   }
 
   if (result.blueprint !== undefined) {
