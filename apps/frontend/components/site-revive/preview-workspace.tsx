@@ -302,8 +302,8 @@ export function PreviewWorkspace() {
 
       <div
         className={cn(
-          "mt-10 grid items-start gap-12",
-          mode === "compare" && "lg:grid-cols-2"
+          "mt-10 grid items-start gap-10 xl:gap-12",
+          mode === "compare" && "xl:grid-cols-2"
         )}
       >
         {showBefore ? (
