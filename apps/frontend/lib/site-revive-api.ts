@@ -17,7 +17,7 @@ import type { GeneratedPage, RedesignResult, SiteContent, WebsiteDesign } from "
  * Configuration (build-time, inlined into the browser bundle by Next.js)
  * ---------------------------------------------------------------------------
  *   NEXT_PUBLIC_SITE_REVIVE_API_MODE
- *       "mock" (default when unset) or "api".
+ *       "api" (default when unset) or "mock" (built-in sample data, opt-in).
  *   NEXT_PUBLIC_SITE_REVIVE_API_URL
  *       Origin of the backend API, e.g. http://localhost:3001 (sam local) or
  *       the API Gateway URL. Required when the mode is "api".
@@ -286,7 +286,7 @@ function configError(detail: string): SiteReviveApiError {
 }
 
 function configuredMode(): string {
-  return (readEnvironment().mode ?? "").trim().toLowerCase() || "mock"
+  return (readEnvironment().mode ?? "").trim().toLowerCase() || "api"
 }
 
 /**
