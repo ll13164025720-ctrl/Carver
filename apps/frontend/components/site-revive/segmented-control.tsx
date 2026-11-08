@@ -33,7 +33,7 @@ export function SegmentedControl<T extends string>({
       role="group"
       aria-label={label}
       className={cn(
-        "inline-flex rounded-xl border border-white/15 bg-white/5 p-1",
+        "inline-flex rounded-lg border border-cream/20 bg-cream/[0.05] p-1",
         className
       )}
     >
@@ -47,10 +47,10 @@ export function SegmentedControl<T extends string>({
             aria-pressed={selected}
             onClick={() => onChange(optionValue)}
             className={cn(
-              "h-9 rounded-lg px-3 text-sm",
+              "h-9 rounded-md px-3.5 text-sm font-medium focus-visible:ring-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gold",
               selected
-                ? "bg-white text-black hover:bg-white/90 hover:text-black dark:hover:bg-white/90"
-                : "text-white/70 hover:bg-white/10 hover:text-white dark:hover:bg-white/10"
+                ? "bg-cream text-forest hover:bg-cream hover:text-forest dark:hover:bg-cream"
+                : "text-cream/75 hover:bg-cream/10 hover:text-cream dark:hover:bg-cream/10"
             )}
           >
             {Icon ? <Icon aria-hidden data-icon="inline-start" /> : null}

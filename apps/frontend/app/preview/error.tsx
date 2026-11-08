@@ -13,13 +13,13 @@ import { cn } from "@/lib/utils"
  */
 export default function PreviewError({ reset }: { error: Error; reset: () => void }) {
   return (
-    <div className="flex flex-1 flex-col bg-black text-white">
+    <div className="flex flex-1 flex-col bg-forest text-cream">
       <SiteHeader showNav={false} />
       <main className="mx-auto flex w-full max-w-xl flex-1 flex-col justify-center px-6 py-16">
-        <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
+        <h1 className="cv-heading text-3xl text-balance sm:text-5xl">
           We couldn&apos;t display this preview
         </h1>
-        <p role="alert" className="mt-4 text-lg leading-8 text-white/70">
+        <p role="alert" className="mt-4 text-lg leading-8 text-cream/75">
           The design data looks unexpected. Try again, or start over with your
           website address.
         </p>
@@ -28,7 +28,7 @@ export default function PreviewError({ reset }: { error: Error; reset: () => voi
             type="button"
             size="lg"
             onClick={reset}
-            className="h-11 rounded-xl bg-violet-600 px-5 text-base font-semibold text-white hover:bg-violet-500"
+            className="cv-btn cv-btn-primary"
           >
             <RotateCcw aria-hidden data-icon="inline-start" />
             Try again
@@ -37,7 +37,7 @@ export default function PreviewError({ reset }: { error: Error; reset: () => voi
             href="/"
             className={cn(
               buttonVariants({ variant: "outline", size: "lg" }),
-              "h-11 rounded-xl border-white/20 bg-transparent px-5 text-base text-white hover:bg-white/10 hover:text-white"
+              "cv-btn cv-btn-secondary"
             )}
           >
             Back to home

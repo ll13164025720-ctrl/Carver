@@ -19,11 +19,21 @@ import { DEMO_EDIT_COMMANDS } from "@/lib/design-editor"
 import {
   parseStoredProject,
   readStoredProjectJson,
+  saveProject,
   type StoredProject,
 } from "@/lib/redesign-session"
-import { describeApiError, editWebsite, isMockMode } from "@/lib/site-revive-api"
+import {
+  API_EDIT_EXAMPLES,
+  describeApiError,
+  editWebsite,
+  isMockMode,
+} from "@/lib/site-revive-api"
 import { cn } from "@/lib/utils"
+import type { WebsiteBlueprint } from "@/types/backend"
 import type { WebsiteDesign } from "@/types/website"
+
+const API_EDIT_PLACEHOLDER =
+  "Describe a change, e.g. Change the hero headline to Welcome to Our Cafe"
 
 type StoredProjectState =
   | { status: "loading" }
@@ -71,13 +81,15 @@ function PreviewPane({ label, caption, tone, children }: PreviewPaneProps) {
       <div className="mb-3 flex items-center gap-3">
         <span
           className={cn(
-            "rounded-full px-3 py-1 text-xs font-semibold tracking-wide uppercase",
-            tone === "after" ? "bg-violet-600 text-white" : "bg-white/15 text-white"
+            "rounded-md px-2.5 py-1 text-xs font-medium tracking-[0.12em] uppercase",
+            tone === "after"
+              ? "bg-gold text-forest"
+              : "border border-cream/30 text-cream"
           )}
         >
           {label}
         </span>
-        <span className="truncate text-sm text-white/50">{caption}</span>
+        <span className="truncate text-sm text-cream/65">{caption}</span>
       </div>
       {children}
     </section>
@@ -88,15 +100,22 @@ export function PreviewWorkspace() {
   const state = useStoredProject()
   const [mode, setMode] = useState<ViewMode>("compare")
   const [device, setDevice] = useState<Device>("desktop")
-  // Design after prompt edits. null until the first successful edit, so the
-  // stored design is used as-is. Edits are kept in memory only (reset on refresh).
-  const [editedDesign, setEditedDesign] = useState<WebsiteDesign | null>(null)
+  // Design (and, with the real backend, its blueprint) after prompt edits. null
+  // until the first successful edit, so the stored project is used as-is. With
+  // the real backend each edit is also written back to the stored project, so a
+  // refresh keeps it. Sample-mode edits stay in memory only (reset on refresh).
+  const [edited, setEdited] = useState<{
+    design: WebsiteDesign
+    blueprint?: WebsiteBlueprint
+  } | null>(null)
 
   if (state.status === "loading") return <ProcessingFallback />
   if (state.status === "empty") return <PreviewEmptyState />
 
   const { sourceUrl, result } = state.project
-  const design = editedDesign ?? result.design
+  const design = edited?.design ?? result.design
+  // Every edit starts from the latest blueprint, not the one first generated.
+  const blueprint = edited?.blueprint ?? result.blueprint
   const hostname = hostnameOf(sourceUrl)
 
   async function applyPrompt(instruction: string): Promise<PromptEditFeedback> {
@@ -105,9 +124,23 @@ export function PreviewWorkspace() {
         projectId: result.projectId,
         prompt: instruction,
         currentDesign: design,
+        blueprint,
+        capture: result.capture,
       })
-      setEditedDesign(edit.design)
-      return { ok: true, message: edit.summary }
+      setEdited({ design: edit.design, blueprint: edit.blueprint })
+      if (edit.blueprint) {
+        // Best effort: if storage refuses, the edit still shows and later edits
+        // still use the blueprint held in state.
+        saveProject(sourceUrl, {
+          ...result,
+          design: edit.design,
+          blueprint: edit.blueprint,
+        })
+      }
+      // With the real backend an edit that changes nothing visible is reported
+      // as a problem so the text stays in the box to be rephrased. In sample
+      // mode "already that value" is a normal answer.
+      return { ok: edit.changed || isMockMode(), message: edit.summary }
     } catch (error) {
       return {
         ok: false,
@@ -134,14 +167,15 @@ export function PreviewWorkspace() {
       {showAfter ? (
         <PromptEditor
           onApply={applyPrompt}
-          examples={DEMO_EDIT_COMMANDS}
-          className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4 sm:p-5"
+          examples={isMockMode() ? DEMO_EDIT_COMMANDS : API_EDIT_EXAMPLES}
+          placeholder={isMockMode() ? undefined : API_EDIT_PLACEHOLDER}
+          className="cv-surface mt-8 p-5 sm:p-6"
         />
       ) : null}
 
       <div
         className={cn(
-          "mt-8 grid items-start gap-10",
+          "mt-10 grid items-start gap-12",
           mode === "compare" && "lg:grid-cols-2"
         )}
       >

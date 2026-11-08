@@ -1,110 +1,148 @@
+import { adaptBlueprint, parseCapture } from "@/lib/blueprint-adapter"
+import { deriveBusinessName } from "@/lib/business-name"
 import { editWebsiteDesign } from "@/lib/design-editor"
 import { mockRedesign } from "@/lib/mock-site-revive"
-import { isSafeImageSrc } from "@/lib/website-render"
+import { safeExternalHref } from "@/lib/website-render"
+import type {
+  BlueprintSection,
+  WebsiteBlueprint,
+  WebsiteCapture,
+} from "@/types/backend"
 import type { RedesignResult, WebsiteDesign } from "@/types/website"
 
 /**
- * Typed client for the SiteRevive backend (FastAPI + Playwright + Bedrock).
- * This is the only module that talks to the backend. UI code calls
+ * Typed client for the SiteRevive backend (AWS Lambda API in apps/backend plus
+ * the Playwright capture worker in apps/capture-worker, which calls Amazon
+ * Bedrock). This is the only module that talks to the backend. UI code calls
  * `redesignWebsite` and `editWebsite` and does not care which mode is active.
  *
  * ---------------------------------------------------------------------------
  * Configuration (build-time, inlined into the browser bundle by Next.js)
  * ---------------------------------------------------------------------------
- *   NEXT_PUBLIC_SITE_REVIVE_API_MODE  "mock" (default when unset) | "api"
- *   NEXT_PUBLIC_SITE_REVIVE_API_URL   Backend origin, e.g. https://api.example.com
- *                                     Required when mode is "api".
+ *   NEXT_PUBLIC_SITE_REVIVE_API_MODE
+ *       "mock" (default when unset) or "api".
+ *   NEXT_PUBLIC_SITE_REVIVE_API_URL
+ *       Origin of the backend API, e.g. http://localhost:3001 (sam local) or
+ *       the API Gateway URL. Required when the mode is "api".
+ *   NEXT_PUBLIC_SITE_REVIVE_SCREENSHOT_BASE_URL
+ *       Optional. Origin that serves capture screenshots, e.g.
+ *       http://localhost:3002. Only used when the backend returns screenshot
+ *       paths such as "/artifacts/<id>-desktop.png" instead of full URLs (the
+ *       backend returns full URLs when its CAPTURE_WORKER_PUBLIC_URL is set).
  *
- * Both values are public: they end up in the JavaScript sent to every visitor.
- * Never put an AWS access key, secret key, session token, API Gateway key or
- * any other secret in a NEXT_PUBLIC_ variable. This client sends no credentials
- * (no cookies, no Authorization header). The browser never talks to AWS
- * services directly. Bedrock and S3 credentials live only on the backend.
+ * All values are public: they end up in the JavaScript sent to every visitor.
+ * Never put an AWS key, token or other secret in a NEXT_PUBLIC_ variable. This
+ * client sends no credentials (no cookies, no Authorization header). Bedrock
+ * and capture-worker credentials live only on the backend.
  *
- * ---------------------------------------------------------------------------
- * Backend contract (synchronous, as proposed)
- * ---------------------------------------------------------------------------
- *   POST {API_URL}/api/redesign
- *     request   { "url": "https://example.com" }
- *     200 body  { "projectId": string, "originalScreenshotUrl": string,
- *                 "design": WebsiteDesign }
- *
- *   POST {API_URL}/api/edit
- *     request   { "projectId": string, "prompt": string }
- *     200 body  { "design": WebsiteDesign }
- *
- *   Both: Content-Type: application/json. Error responses use a non-2xx
- *   status and, ideally, the body { "error": { "code": string, "message": string } }.
- *   FastAPI's default { "detail": "..." } is also understood. The `message` of
- *   a 400/404/422 response is shown to the user, so it must be safe to display.
- *   The backend must answer CORS preflight for the frontend origin. Because no
- *   credentials are sent, it must not require `Allow-Credentials`.
+ * Mode changes need a restart of `next dev` (values are read at build time).
+ * In "api" mode a failed request is always reported as an error. It never falls
+ * back to the built-in sample, so sample data cannot pass as a real result.
  *
  * ---------------------------------------------------------------------------
- * If the backend uses asynchronous jobs (NOT implemented here)
+ * Backend contract (all synchronous, JSON, no polling)
  * ---------------------------------------------------------------------------
- * A redesign (Playwright capture + Bedrock) may outlast common gateway limits
- * (API Gateway REST default 29 s, ALB idle timeout default 60 s). If the backend
- * team moves to jobs, the backend team must define and document these, and this
- * client will be extended to match. This module does not guess endpoint names.
- *   1. Start: POST /api/redesign must answer quickly with HTTP 202 and a body
- *      that identifies the job and says where to read its status.
- *   2. Status read: one request that returns the job state. The frontend needs
- *      at least: a state of queued | running | succeeded | failed, optionally
- *      the current stage (one of the four stages shown in the UI) so the
- *      progress list can show real progress, and a suggested poll interval.
- *   3. Success: the final status response (or a result URL it points to)
- *      carries exactly the 200 body of the synchronous contract above.
- *   4. Failure: the status response carries the same { error: { code, message } }
- *      shape, with a flag saying whether retrying can help.
- *   5. Job lifetime: how long a finished job and its projectId stay readable.
- *   6. Same rules for /api/edit if edits can also take longer than the gateway limit.
- * Until then, a 202 response is reported to the user as "async_unsupported".
+ *   POST /api/captures
+ *     request   { sourceUrl }
+ *     200 body  { ok: true, capture, sourceContent }
+ *   POST /api/blueprints/generate
+ *     request   { businessName, businessType?, description?, sourceUrl?, sourceContent? }
+ *     200 body  { ok: true, blueprint }
+ *   POST /api/blueprints/edit
+ *     request   { blueprint, prompt }          (the backend keeps no state)
+ *     200 body  { ok: true, blueprint, operations }
+ *   Errors      non-2xx with { error: "<message>", details? }
+ *
+ * A redesign is two sequential calls, capture then generate. Each is bounded
+ * by the backend (the capture worker gives up after 28 s, the Lambda after
+ * 45 s) and API Gateway's 30 s limit, so there are no job ids to poll. The
+ * Zod schemas in packages/shared are the source of truth for these shapes.
  */
 
 // ---------------------------------------------------------------------------
 // Contract types
 // ---------------------------------------------------------------------------
 
-/** Body of POST /api/redesign. */
-export interface RedesignRequest {
-  url: string
+/** Body of POST /api/captures. */
+export interface CaptureRequest {
+  sourceUrl: string
 }
 
-/** 200 body of POST /api/redesign. Same shape the UI already stores. */
-export type RedesignResponse = RedesignResult
+/** Body of POST /api/blueprints/generate. */
+export interface GenerateBlueprintRequest {
+  businessName: string
+  businessType?: string
+  description?: string
+  sourceUrl?: string
+  sourceContent?: string
+}
 
-/** Body of POST /api/edit. */
-export interface EditRequest {
-  projectId: string
+/** Body of POST /api/blueprints/edit. */
+export interface EditBlueprintRequest {
+  blueprint: WebsiteBlueprint
   prompt: string
 }
 
-/** 200 body of POST /api/edit. */
-export interface EditResponse {
-  design: WebsiteDesign
+/** What `redesignWebsite` hands to the UI. */
+export type RedesignResponse = RedesignResult
+
+export interface EditInput {
+  projectId: string
+  prompt: string
+  /** The design currently shown. Used to detect edits that change nothing visible. */
+  currentDesign: WebsiteDesign
+  /** The blueprint behind `currentDesign`. Required in "api" mode, unused in "mock" mode. */
+  blueprint?: WebsiteBlueprint
+  /** The capture stored with the project. Optional. */
+  capture?: WebsiteCapture
 }
 
 /** What `editWebsite` hands to the UI. */
-export interface EditOutcome extends EditResponse {
+export interface EditOutcome {
+  design: WebsiteDesign
+  /** The updated blueprint to store for the next edit. Absent in mock mode. */
+  blueprint?: WebsiteBlueprint
+  /**
+   * False when nothing visible changed: in mock mode the design already matched,
+   * in api mode the backend only changed details the preview does not show.
+   */
+  changed: boolean
   /** Plain-language description of what happened, safe to show to the user. */
   summary: string
 }
 
 export type ApiMode = "mock" | "api"
 
+/** Where a redesign is, so the UI can show real progress. */
+export type RedesignStage = "capturing" | "designing"
+
 export interface RequestOptions {
   /** Cancels the request. Rejects with code "aborted". */
   signal?: AbortSignal
-  /** Overrides the default timeout for this request. */
+  /** Overrides the default timeout of each HTTP request. */
   timeoutMs?: number
+}
+
+export interface RedesignOptions extends RequestOptions {
+  /** Called when the redesign moves to a new stage. Not called in mock mode. */
+  onStage?: (stage: RedesignStage) => void
 }
 
 /** Prompt length limit. Matches the limit the existing editor already enforces. */
 export const MAX_PROMPT_LENGTH = 300
-/** Capture and redesign are slow (page load, screenshot, model call). */
-export const REDESIGN_TIMEOUT_MS = 120_000
-export const EDIT_TIMEOUT_MS = 60_000
+/** Opening the page, extracting content and taking two screenshots. */
+export const CAPTURE_TIMEOUT_MS = 45_000
+/** One Bedrock call that writes a whole blueprint. */
+export const GENERATE_TIMEOUT_MS = 60_000
+/** One Bedrock call that returns a few edit operations. */
+export const EDIT_TIMEOUT_MS = 45_000
+
+/** Example instructions the real backend can follow (text edits inside sections). */
+export const API_EDIT_EXAMPLES: readonly string[] = [
+  "Change the hero headline to Welcome to Our Cafe",
+  "Change the hero button text to Contact Us",
+  "Rewrite the about text to be shorter",
+]
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -119,14 +157,12 @@ export type SiteReviveApiErrorCode =
   | "aborted"
   /** HTTP 400 or 422. */
   | "bad_request"
-  /** HTTP 404, e.g. the project no longer exists. */
+  /** HTTP 404, or a project whose saved data is gone. */
   | "not_found"
   /** HTTP 429. */
   | "rate_limited"
   /** HTTP 5xx or another unexpected status. */
   | "server"
-  /** HTTP 202: the backend started an asynchronous job, which is not supported yet. */
-  | "async_unsupported"
   /** 2xx, but the body is not the agreed shape. */
   | "invalid_response"
   /** Mock mode only: the demo editor did not understand the instruction. */
@@ -138,17 +174,23 @@ export class SiteReviveApiError extends Error {
   readonly status?: number
   /** True when trying the same request again can reasonably succeed. */
   readonly retryable: boolean
+  /**
+   * Technical detail for developers (the backend's own error text). Never show
+   * it to users: it can mention internals such as AWS or Playwright errors.
+   */
+  readonly detail?: string
 
   constructor(
     code: SiteReviveApiErrorCode,
     message: string,
-    options: { status?: number; retryable?: boolean; cause?: unknown } = {}
+    options: { status?: number; retryable?: boolean; cause?: unknown; detail?: string } = {}
   ) {
     super(message, { cause: options.cause })
     this.name = "SiteReviveApiError"
     this.code = code
     this.status = options.status
     this.retryable = options.retryable ?? false
+    this.detail = options.detail
   }
 }
 
@@ -159,26 +201,43 @@ export function describeApiError(error: unknown, fallback: string): string {
     : fallback
 }
 
+/** Developer console hint. Silent in production builds. */
+function warnInDevelopment(message: string): void {
+  if (process.env.NODE_ENV !== "production") console.warn(`[SiteRevive API] ${message}`)
+}
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
-// Each variable must be read as a literal `process.env.NEXT_PUBLIC_*` so Next.js
-// can inline it. Dynamic lookups are not inlined.
-const MODE_ENV = process.env.NEXT_PUBLIC_SITE_REVIVE_API_MODE
-const URL_ENV = process.env.NEXT_PUBLIC_SITE_REVIVE_API_URL
+/**
+ * Each variable must be read as a literal `process.env.NEXT_PUBLIC_*` so Next.js
+ * can inline it. Dynamic lookups (`process.env[name]`) are not inlined. The
+ * reads happen when a function runs, not when the module loads, which makes no
+ * difference in the browser (the values are already inlined) and lets tests
+ * switch modes.
+ */
+function readEnvironment() {
+  return {
+    mode: process.env.NEXT_PUBLIC_SITE_REVIVE_API_MODE,
+    apiUrl: process.env.NEXT_PUBLIC_SITE_REVIVE_API_URL,
+    screenshotUrl: process.env.NEXT_PUBLIC_SITE_REVIVE_SCREENSHOT_BASE_URL,
+  }
+}
 
-type ApiConfig = { mode: "mock" } | { mode: "api"; baseUrl: string }
+type ApiConfig =
+  | { mode: "mock" }
+  | { mode: "api"; baseUrl: string; screenshotBaseUrl?: string }
 
 function configError(detail: string): SiteReviveApiError {
   return new SiteReviveApiError(
     "config",
-    `SiteRevive is not configured correctly: ${detail}`
+    `CARVER is not configured correctly: ${detail}`
   )
 }
 
 function configuredMode(): string {
-  return (MODE_ENV ?? "").trim().toLowerCase() || "mock"
+  return (readEnvironment().mode ?? "").trim().toLowerCase() || "mock"
 }
 
 /**
@@ -194,6 +253,31 @@ function isLocalHost(hostname: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]"
 }
 
+/** Validates a configured URL. Returns it without a trailing slash. */
+function parseConfiguredUrl(raw: string, name: string): URL {
+  let parsed: URL
+  try {
+    parsed = new URL(raw)
+  } catch {
+    throw configError(`${name} is not a valid URL.`)
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw configError(`${name} must start with http:// or https://.`)
+  }
+  if (parsed.username || parsed.password) {
+    // Public variables are visible to every visitor.
+    throw configError(`${name} must not contain credentials.`)
+  }
+  if (
+    process.env.NODE_ENV === "production" &&
+    parsed.protocol !== "https:" &&
+    !isLocalHost(parsed.hostname)
+  ) {
+    throw configError(`${name} must use https:// in production.`)
+  }
+  return parsed
+}
+
 function resolveConfig(): ApiConfig {
   const mode = configuredMode()
   if (mode === "mock") return { mode: "mock" }
@@ -203,35 +287,25 @@ function resolveConfig(): ApiConfig {
     )
   }
 
-  const raw = (URL_ENV ?? "").trim()
-  if (!raw) {
+  const environment = readEnvironment()
+  const rawUrl = (environment.apiUrl ?? "").trim()
+  if (!rawUrl) {
     throw configError(
       'NEXT_PUBLIC_SITE_REVIVE_API_URL is not set (required when the mode is "api").'
     )
   }
+  const api = parseConfiguredUrl(rawUrl, "NEXT_PUBLIC_SITE_REVIVE_API_URL")
 
-  let parsed: URL
-  try {
-    parsed = new URL(raw)
-  } catch {
-    throw configError("NEXT_PUBLIC_SITE_REVIVE_API_URL is not a valid URL.")
-  }
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-    throw configError("NEXT_PUBLIC_SITE_REVIVE_API_URL must start with http:// or https://.")
-  }
-  if (parsed.username || parsed.password) {
-    // Public variables are visible to every visitor.
-    throw configError("NEXT_PUBLIC_SITE_REVIVE_API_URL must not contain credentials.")
-  }
-  if (
-    process.env.NODE_ENV === "production" &&
-    parsed.protocol !== "https:" &&
-    !isLocalHost(parsed.hostname)
-  ) {
-    throw configError("NEXT_PUBLIC_SITE_REVIVE_API_URL must use https:// in production.")
-  }
+  const rawScreenshots = (environment.screenshotUrl ?? "").trim()
+  const screenshots = rawScreenshots
+    ? parseConfiguredUrl(rawScreenshots, "NEXT_PUBLIC_SITE_REVIVE_SCREENSHOT_BASE_URL")
+    : null
 
-  return { mode: "api", baseUrl: parsed.origin + parsed.pathname.replace(/\/+$/, "") }
+  return {
+    mode: "api",
+    baseUrl: api.origin + api.pathname.replace(/\/+$/, ""),
+    ...(screenshots ? { screenshotBaseUrl: screenshots.origin } : {}),
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -245,10 +319,11 @@ function isObj(value: unknown): value is Obj {
 }
 
 /**
- * Structural check of a design from the network. It confirms the blocks the
- * renderer reads exist with the right container type, so a broken response is
- * reported as an error here instead of crashing the preview. Individual values
- * (colours, fonts, URLs) are validated again when rendered.
+ * Structural check of a design. It confirms the blocks the renderer reads exist
+ * with the right container type, so a broken design is reported as an error
+ * instead of crashing the preview. Individual values (colours, fonts, URLs) are
+ * validated again when rendered. Designs built by the blueprint adapter always
+ * pass; this also guards designs read back from storage.
  */
 export function isWebsiteDesign(value: unknown): value is WebsiteDesign {
   if (!isObj(value)) return false
@@ -289,97 +364,124 @@ export function isWebsiteDesign(value: unknown): value is WebsiteDesign {
   )
 }
 
-function invalidResponse(what: string): SiteReviveApiError {
+function invalidResponse(what: string, detail?: string): SiteReviveApiError {
+  warnInDevelopment(`The backend sent an unreadable ${what}${detail ? `: ${detail}` : "."}`)
   return new SiteReviveApiError(
     "invalid_response",
-    `The SiteRevive service sent a ${what} we couldn't read. Please try again.`,
-    { retryable: true }
+    `The CARVER service sent a ${what} we couldn't read. Please try again.`,
+    { retryable: true, detail }
   )
-}
-
-function parseRedesignResponse(body: unknown): RedesignResponse {
-  if (
-    !isObj(body) ||
-    typeof body.projectId !== "string" ||
-    !body.projectId ||
-    !isSafeImageSrc(body.originalScreenshotUrl) ||
-    !isWebsiteDesign(body.design)
-  ) {
-    throw invalidResponse("redesign result")
-  }
-  return {
-    projectId: body.projectId,
-    originalScreenshotUrl: body.originalScreenshotUrl,
-    design: body.design,
-  }
-}
-
-function parseEditResponse(body: unknown): EditResponse {
-  if (!isObj(body) || !isWebsiteDesign(body.design)) {
-    throw invalidResponse("design update")
-  }
-  return { design: body.design }
 }
 
 // ---------------------------------------------------------------------------
 // HTTP
 // ---------------------------------------------------------------------------
 
-type Operation = "redesign" | "edit"
+type Operation = "capture" | "generate" | "edit"
 
-/** Message from { error: { message } } or FastAPI's { detail: "..." }, if present. */
+/** Message from { error: "..." }, { error: { message } } or { detail: "..." }, if present. */
 function serverMessage(text: string): string | null {
   try {
     const body: unknown = JSON.parse(text)
     if (!isObj(body)) return null
     const message =
-      isObj(body.error) && typeof body.error.message === "string"
-        ? body.error.message
-        : typeof body.detail === "string"
-          ? body.detail
-          : null
-    const trimmed = message?.trim()
+      typeof body.error === "string"
+        ? body.error
+        : isObj(body.error) && typeof body.error.message === "string"
+          ? body.error.message
+          : typeof body.detail === "string"
+            ? body.detail
+            : null
+    const trimmed = message?.replace(/\s+/g, " ").trim()
     return trimmed ? trimmed.slice(0, 300) : null
   } catch {
     return null
   }
 }
 
+/**
+ * Capture failures that are about the user's website and safe to show as the
+ * backend wrote them. Anything else from a capture failure can be an internal
+ * Playwright or network message, so it gets the generic text instead.
+ */
+const SHOWABLE_CAPTURE_FAILURE =
+  /^(?:The website responded with HTTP \d{3}\.|The website could not be loaded\.)$/
+
+const TEXT = {
+  captureFailed:
+    "We couldn't capture that website. It may be offline, slow, or blocking automated visits. Try again, or try a different page.",
+  captureRejected: "That website address was not accepted. Check it and try again.",
+  captureTimeout: "That website took too long to load, so we stopped waiting. Please try again.",
+  generateFailed: "The AI couldn't create a design this time. Please try again.",
+  generateRejected: "The CARVER service could not use that website's content. Please try again.",
+  generateTimeout: "The AI took too long to answer, so we stopped waiting. Please try again.",
+  editFailed:
+    "We couldn't apply that change. Try rephrasing it, for example: Change the hero headline to Welcome.",
+  editRejected: "That instruction couldn't be accepted. Try a shorter or clearer one.",
+  editTimeout: "The AI took too long to answer, so we stopped waiting. Please try again.",
+} as const
+
 function httpError(status: number, text: string, operation: Operation): SiteReviveApiError {
-  if (status === 400 || status === 422) {
+  const detail = serverMessage(text) ?? undefined
+  warnInDevelopment(
+    `${operation} failed with HTTP ${status}${detail ? `: ${detail}` : "."}`
+  )
+  const base = { status, detail }
+
+  if (status === 429) {
     return new SiteReviveApiError(
-      "bad_request",
-      serverMessage(text) ?? "The SiteRevive service could not accept that request.",
-      { status }
+      "rate_limited",
+      "Too many requests right now. Wait a moment and try again.",
+      { ...base, retryable: true }
+    )
+  }
+  if (status === 408 || status === 504) {
+    const message =
+      operation === "capture"
+        ? TEXT.captureTimeout
+        : operation === "generate"
+          ? TEXT.generateTimeout
+          : TEXT.editTimeout
+    return new SiteReviveApiError("timeout", message, { ...base, retryable: true })
+  }
+  if (status === 401 || status === 403) {
+    return new SiteReviveApiError(
+      "server",
+      "The CARVER service refused the request. Please try again later.",
+      base
     )
   }
   if (status === 404) {
     return new SiteReviveApiError(
       "not_found",
-      operation === "edit"
-        ? "This project is no longer available. Start a new redesign."
-        : "The SiteRevive service could not be found. Please try again later.",
-      { status }
+      "The CARVER service could not be found. Please try again later.",
+      base
     )
   }
-  if (status === 408 || status === 504) {
-    return new SiteReviveApiError(
-      "timeout",
-      "The SiteRevive service took too long to answer. Please try again.",
-      { status, retryable: true }
-    )
+  if (status === 400 || status === 422) {
+    // Worker validation messages ("Local and internal network addresses cannot
+    // be captured.") are written for users. Schema errors ("Invalid ...") are not.
+    const showable = operation === "capture" && detail && !/^Invalid\b/i.test(detail)
+    const message =
+      operation === "capture"
+        ? showable
+          ? detail
+          : TEXT.captureRejected
+        : operation === "generate"
+          ? TEXT.generateRejected
+          : TEXT.editRejected
+    return new SiteReviveApiError("bad_request", message, base)
   }
-  if (status === 429) {
-    return new SiteReviveApiError(
-      "rate_limited",
-      "Too many requests right now. Wait a moment and try again.",
-      { status, retryable: true }
-    )
+
+  const retryable = status >= 500
+  if (operation === "capture") {
+    const message = detail && SHOWABLE_CAPTURE_FAILURE.test(detail) ? detail : TEXT.captureFailed
+    return new SiteReviveApiError("server", message, { ...base, retryable })
   }
   return new SiteReviveApiError(
     "server",
-    "The SiteRevive service ran into a problem. Please try again.",
-    { status, retryable: status >= 500 }
+    operation === "generate" ? TEXT.generateFailed : TEXT.editFailed,
+    { ...base, retryable }
   )
 }
 
@@ -403,6 +505,11 @@ async function postJson(
   else signal?.addEventListener("abort", forwardAbort, { once: true })
 
   try {
+    // Cancelled before it started: send nothing.
+    if (signal?.aborted) {
+      throw new SiteReviveApiError("aborted", "The request was cancelled.")
+    }
+
     let response: Response
     let text: string
     try {
@@ -428,20 +535,16 @@ async function postJson(
       if (signal?.aborted) {
         throw new SiteReviveApiError("aborted", "The request was cancelled.", { cause })
       }
+      warnInDevelopment(
+        `${operation}: could not reach ${baseUrl}. Is the backend running, and does it allow requests from this origin (CORS)?`
+      )
       throw new SiteReviveApiError(
         "network",
-        "We couldn't reach the SiteRevive service. Check your connection and try again.",
+        "We couldn't reach the CARVER service. Check your connection and try again.",
         { retryable: true, cause }
       )
     }
 
-    if (response.status === 202) {
-      throw new SiteReviveApiError(
-        "async_unsupported",
-        "The SiteRevive service started a background job, which this version of the app can't follow yet.",
-        { status: 202 }
-      )
-    }
     if (!response.ok) throw httpError(response.status, text, operation)
 
     try {
@@ -456,47 +559,221 @@ async function postJson(
 }
 
 // ---------------------------------------------------------------------------
-// Public API
+// Capture cache
 // ---------------------------------------------------------------------------
 
 /**
+ * A capture takes 10 to 25 seconds and leaves screenshots on the worker. When
+ * the capture succeeds but the AI step fails, "Try again" reuses it instead of
+ * visiting the website a second time. Entries are dropped after a successful
+ * redesign and expire after ten minutes, so a later redesign sees fresh content.
+ */
+const CAPTURE_CACHE_TTL_MS = 10 * 60 * 1000
+const CAPTURE_CACHE_MAX_ENTRIES = 5
+
+interface CapturedPage {
+  capture: WebsiteCapture
+  /** Preformatted page content for /api/blueprints/generate. */
+  sourceContent?: string
+}
+
+const captureCache = new Map<string, { page: CapturedPage; at: number }>()
+
+function cachedCapture(url: string): CapturedPage | null {
+  const entry = captureCache.get(url)
+  if (!entry) return null
+  if (Date.now() - entry.at > CAPTURE_CACHE_TTL_MS) {
+    captureCache.delete(url)
+    return null
+  }
+  return entry.page
+}
+
+function rememberCapture(url: string, page: CapturedPage): void {
+  captureCache.set(url, { page, at: Date.now() })
+  while (captureCache.size > CAPTURE_CACHE_MAX_ENTRIES) {
+    const oldest = captureCache.keys().next().value
+    if (oldest === undefined) break
+    captureCache.delete(oldest)
+  }
+}
+
+/** Forgets every remembered capture. */
+export function clearCaptureCache(): void {
+  captureCache.clear()
+}
+
+// ---------------------------------------------------------------------------
+// Redesign
+// ---------------------------------------------------------------------------
+
+const MAX_SOURCE_URL_LENGTH = 2048
+const MAX_DESCRIPTION_LENGTH = 1000
+const MAX_SOURCE_CONTENT_LENGTH = 12_000
+
+async function captureWebsite(
+  config: Extract<ApiConfig, { mode: "api" }>,
+  url: string,
+  options: RedesignOptions
+): Promise<CapturedPage> {
+  const request: CaptureRequest = { sourceUrl: url }
+  const body = await postJson(
+    config.baseUrl,
+    "/api/captures",
+    request,
+    "capture",
+    options.timeoutMs ?? CAPTURE_TIMEOUT_MS,
+    options.signal
+  )
+
+  const parsed = parseCapture(isObj(body) ? body.capture : undefined)
+  if (!parsed.ok) throw invalidResponse("page capture", parsed.error)
+
+  return {
+    capture: parsed.value,
+    sourceContent:
+      isObj(body) && typeof body.sourceContent === "string" && body.sourceContent.trim()
+        ? body.sourceContent
+        : undefined,
+  }
+}
+
+/**
+ * The URL the browser can load the original-site screenshot from. Full http(s)
+ * URLs are used as they are. A path such as "/artifacts/<id>-desktop.png" needs
+ * the screenshot origin from the environment. Without it the screenshot cannot
+ * be located, so "" is returned and the "Before" pane shows a text placeholder.
+ */
+function screenshotUrlFor(
+  capture: WebsiteCapture,
+  config: Extract<ApiConfig, { mode: "api" }>
+): string {
+  const raw = capture.screenshots.desktop.trim()
+  const absolute = safeExternalHref(raw)
+  if (absolute) return absolute
+
+  if (raw.startsWith("/") && !raw.startsWith("//") && config.screenshotBaseUrl) {
+    return safeExternalHref(`${config.screenshotBaseUrl}${raw}`) ?? ""
+  }
+  warnInDevelopment(
+    "The capture's screenshot is a path, not a full URL. Set CAPTURE_WORKER_PUBLIC_URL on the backend or NEXT_PUBLIC_SITE_REVIVE_SCREENSHOT_BASE_URL here."
+  )
+  return ""
+}
+
+/** The capture as stored with a project: long page text is not needed again. */
+function compactCapture(capture: WebsiteCapture): WebsiteCapture {
+  return { ...capture, text: "", headings: [] }
+}
+
+/**
  * Creates a redesign for a website.
+ *
  * Mock mode returns the sample cafe design immediately. The artificial pacing
  * that makes the demo feel real lives in `lib/redesign-job.ts`, not here.
+ *
+ * Api mode makes two requests: capture the page, then generate a blueprint
+ * from the captured content, and converts the blueprint to a design. A failed
+ * request rejects. It never returns sample data.
+ *
  * Rejects with SiteReviveApiError.
  */
 export async function redesignWebsite(
   url: string,
-  options: RequestOptions = {}
+  options: RedesignOptions = {}
 ): Promise<RedesignResponse> {
   const config = resolveConfig()
 
   if (config.mode === "mock") return mockRedesign(url)
 
-  const request: RedesignRequest = { url }
+  // 1. Capture (skipped when an earlier attempt already captured this URL).
+  let page = cachedCapture(url)
+  if (!page) {
+    options.onStage?.("capturing")
+    page = await captureWebsite(config, url, options)
+    rememberCapture(url, page)
+  }
+  const { capture, sourceContent } = page
+
+  // 2. Generate. The business name is a guess from the page title or domain.
+  options.onStage?.("designing")
+  const description = capture.description.trim().slice(0, MAX_DESCRIPTION_LENGTH)
+  const request: GenerateBlueprintRequest = {
+    businessName: deriveBusinessName(capture.title, capture.finalUrl || url),
+    ...(description ? { description } : {}),
+    ...(url.length <= MAX_SOURCE_URL_LENGTH ? { sourceUrl: url } : {}),
+    ...(sourceContent ? { sourceContent: sourceContent.slice(0, MAX_SOURCE_CONTENT_LENGTH) } : {}),
+  }
   const body = await postJson(
     config.baseUrl,
-    "/api/redesign",
+    "/api/blueprints/generate",
     request,
-    "redesign",
-    options.timeoutMs ?? REDESIGN_TIMEOUT_MS,
+    "generate",
+    options.timeoutMs ?? GENERATE_TIMEOUT_MS,
     options.signal
   )
-  return parseRedesignResponse(body)
+
+  // 3. Convert. The adapter validates the blueprint and fills any gaps.
+  const adapted = adaptBlueprint(isObj(body) ? body.blueprint : undefined, capture)
+  if (!adapted.ok) throw invalidResponse("website design", adapted.error)
+
+  captureCache.delete(url)
+  return {
+    projectId: capture.captureId,
+    originalScreenshotUrl: screenshotUrlFor(capture, config),
+    design: adapted.value.design,
+    blueprint: adapted.value.blueprint,
+    capture: compactCapture(capture),
+  }
 }
 
-export interface EditInput extends EditRequest {
-  /**
-   * The design currently shown. Used in mock mode only, because the demo editor
-   * changes a design locally. It is never sent to the backend: the backend
-   * holds the latest design for `projectId`.
-   */
-  currentDesign: WebsiteDesign
+// ---------------------------------------------------------------------------
+// Edit
+// ---------------------------------------------------------------------------
+
+/** "primaryButtonText" becomes "primary button text". Letters and digits only. */
+function fieldWords(field: string): string {
+  return field
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[^A-Za-z0-9]+/g, " ")
+    .trim()
+    .toLowerCase()
+    .slice(0, 30)
 }
 
 /**
+ * Describes what the backend changed ("Updated the hero headline."), using only
+ * section types and field names, never the AI's new values, which are untrusted.
+ */
+function describeOperations(
+  operations: unknown,
+  sections: readonly BlueprintSection[]
+): string {
+  const parts: string[] = []
+  for (const operation of Array.isArray(operations) ? operations : []) {
+    if (!isObj(operation) || typeof operation.sectionId !== "string") continue
+    if (typeof operation.field !== "string") continue
+    const type = sections.find((section) => section.id === operation.sectionId)?.type
+    const words = fieldWords(operation.field)
+    if (!words) continue
+    const label = type ? `${type} ${words}` : words
+    if (!parts.includes(label)) parts.push(label)
+  }
+  if (parts.length === 0) return "Updated the design."
+  const shown = parts.slice(0, 3).join(", ")
+  const more = parts.length > 3 ? ` and ${parts.length - 3} more` : ""
+  return `Updated the ${shown}${more}.`
+}
+
+const NOT_VISIBLE_SUMMARY =
+  "The AI changed details that this preview doesn't show, so nothing looks different. Try asking for a visible change, such as the headline or a paragraph."
+
+/**
  * Applies a natural-language edit to a project's design.
- * Rejects with SiteReviveApiError.
+ *
+ * Mock mode edits the design locally. Api mode sends the stored blueprint and
+ * the instruction to /api/blueprints/edit, then converts the blueprint it gets
+ * back. Rejects with SiteReviveApiError.
  */
 export async function editWebsite(
   input: EditInput,
@@ -518,18 +795,38 @@ export async function editWebsite(
   if (config.mode === "mock") {
     const result = await editWebsiteDesign(input.currentDesign, prompt)
     if (!result.ok) throw new SiteReviveApiError("rejected", result.error)
-    return { design: result.design, summary: result.summary }
+    return { design: result.design, changed: result.changed, summary: result.summary }
   }
 
-  // Explicit fields: `currentDesign` must never reach the network.
-  const request: EditRequest = { projectId: input.projectId, prompt }
+  if (!input.blueprint) {
+    throw new SiteReviveApiError(
+      "not_found",
+      "This project can't be edited because its saved data is missing. Start a new redesign."
+    )
+  }
+
+  // Explicit fields: the design and capture must never reach the network.
+  const request: EditBlueprintRequest = { blueprint: input.blueprint, prompt }
   const body = await postJson(
     config.baseUrl,
-    "/api/edit",
+    "/api/blueprints/edit",
     request,
     "edit",
     options.timeoutMs ?? EDIT_TIMEOUT_MS,
     options.signal
   )
-  return { ...parseEditResponse(body), summary: "Updated the design." }
+
+  const adapted = adaptBlueprint(isObj(body) ? body.blueprint : undefined, input.capture)
+  if (!adapted.ok) throw invalidResponse("design update", adapted.error)
+
+  const { design, blueprint } = adapted.value
+  const changed = JSON.stringify(design) !== JSON.stringify(input.currentDesign)
+  return {
+    design,
+    blueprint,
+    changed,
+    summary: changed
+      ? describeOperations(isObj(body) ? body.operations : undefined, blueprint.sections)
+      : NOT_VISIBLE_SUMMARY,
+  }
 }

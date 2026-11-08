@@ -10,11 +10,7 @@ import {
   type ProcessingStatus,
 } from "@/components/site-revive/processing-stages"
 import { Button, buttonVariants } from "@/components/ui/button"
-import {
-  REDESIGN_STAGES,
-  stageIndexAt,
-  startRedesignJob,
-} from "@/lib/redesign-job"
+import { REDESIGN_STAGES, startRedesignJob } from "@/lib/redesign-job"
 import { clearProject, saveProject } from "@/lib/redesign-session"
 import { isMockMode } from "@/lib/site-revive-api"
 import { cn } from "@/lib/utils"
@@ -47,10 +43,10 @@ export function RedesignProcessor() {
   if (!validation.ok) {
     return (
       <Shell>
-        <h1 className="text-3xl font-semibold tracking-tight">
+        <h1 className="cv-heading text-3xl text-balance sm:text-4xl">
           We couldn&apos;t read that website address
         </h1>
-        <p role="alert" className="mt-4 text-white/70">
+        <p role="alert" className="mt-4 text-lg leading-8 text-(--cv-error)">
           {validation.error}
         </p>
         <BackToStart className="mt-8" label="Enter a website URL" />
@@ -97,7 +93,7 @@ function ProcessingView({ url, hostname, simulateFailure }: ProcessingViewProps)
     })
 
     const ticker = setInterval(() => {
-      setStageIndex(stageIndexAt(Date.now() - job.startedAt))
+      setStageIndex(job.stageIndex())
     }, 250)
 
     job.promise.then(
@@ -129,7 +125,7 @@ function ProcessingView({ url, hostname, simulateFailure }: ProcessingViewProps)
         clearInterval(ticker)
         setPhase({
           status: "error",
-          failedStage: stageIndexAt(Date.now() - job.startedAt),
+          failedStage: job.stageIndex(),
           message:
             error instanceof Error && error.message
               ? error.message
@@ -172,20 +168,20 @@ function ProcessingView({ url, hostname, simulateFailure }: ProcessingViewProps)
   return (
     <Shell>
       {mockMode ? (
-        <p className="mb-4 inline-flex w-fit items-center gap-2 rounded-full border border-white/15 px-3 py-1 text-xs font-medium text-white/70">
+        <p className="mb-4 inline-flex w-fit items-center gap-2 rounded-full border border-cream/25 px-3 py-1 text-xs font-medium text-cream/75">
           <FlaskConical className="size-3.5" aria-hidden />
           Demo mode
         </p>
       ) : null}
 
-      <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">
+      <h1 className="cv-heading text-3xl text-balance sm:text-5xl">
         {heading}
       </h1>
 
-      <div className="mt-6 flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 px-4 py-3">
-        <Globe className="size-5 shrink-0 text-white/60" aria-hidden />
+      <div className="cv-surface mt-8 flex items-center gap-3 px-4 py-3.5">
+        <Globe className="size-5 shrink-0 text-gold" aria-hidden />
         <div className="min-w-0">
-          <p className="text-xs text-white/50">Website</p>
+          <p className="text-xs text-cream/60">Website</p>
           <p className="truncate font-medium" title={url}>
             {url}
           </p>
@@ -193,13 +189,13 @@ function ProcessingView({ url, hostname, simulateFailure }: ProcessingViewProps)
       </div>
 
       <ProcessingStages
-        className="mt-6"
+        className="mt-8"
         stages={REDESIGN_STAGES}
         activeIndex={activeIndex}
         status={status}
       />
 
-      <p className="mt-6 text-sm leading-6 text-white/50">
+      <p className="mt-8 text-sm leading-6 text-cream/65">
         {mockMode ? (
           <>
             These steps are simulated. In demo mode we don&apos;t contact{" "}
@@ -222,15 +218,15 @@ function ProcessingView({ url, hostname, simulateFailure }: ProcessingViewProps)
       {phase.status === "error" ? (
         <div
           role="alert"
-          className="mt-6 rounded-xl border border-red-400/30 bg-red-500/10 p-4"
+          className="mt-8 rounded-lg border border-(--cv-error)/40 bg-(--cv-error)/10 p-5"
         >
-          <p className="text-sm leading-6 text-red-200">{phase.message}</p>
+          <p className="text-sm leading-6 text-cream">{phase.message}</p>
           <div className="mt-4 flex flex-col gap-3 sm:flex-row">
             <Button
               type="button"
               size="lg"
               onClick={handleRetry}
-              className="h-11 rounded-xl bg-violet-600 px-5 text-base font-semibold text-white shadow-lg shadow-violet-600/30 hover:bg-violet-500 focus-visible:border-violet-300 focus-visible:ring-violet-400/50"
+              className="cv-btn cv-btn-primary"
             >
               <RotateCcw aria-hidden data-icon="inline-start" />
               Try again
@@ -242,7 +238,7 @@ function ProcessingView({ url, hostname, simulateFailure }: ProcessingViewProps)
 
       {phase.status === "running" ? (
         <BackToStart
-          className="mt-6 border-transparent px-0 text-white/60 hover:bg-transparent hover:text-white"
+          className="cv-btn-quiet mt-4 w-fit"
           label="Cancel"
           showArrow={false}
         />
@@ -253,7 +249,7 @@ function ProcessingView({ url, hostname, simulateFailure }: ProcessingViewProps)
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <main className="mx-auto flex w-full max-w-xl flex-1 flex-col justify-center px-6 py-12 sm:py-16">
+    <main className="mx-auto flex w-full max-w-xl flex-1 flex-col justify-center px-6 py-12 sm:py-20">
       {children}
     </main>
   )
@@ -273,7 +269,7 @@ function BackToStart({
       href="/"
       className={cn(
         buttonVariants({ variant: "outline", size: "lg" }),
-        "h-11 w-fit rounded-xl border-white/20 bg-transparent px-5 text-base text-white hover:bg-white/10 hover:text-white",
+        "cv-btn cv-btn-secondary w-fit",
         className
       )}
     >

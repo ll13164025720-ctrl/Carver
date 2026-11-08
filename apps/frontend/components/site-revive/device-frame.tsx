@@ -83,7 +83,7 @@ export function DeviceFrame({ device, address, children, className }: DeviceFram
     return (
       <div
         className={cn(
-          "mx-auto w-full overflow-hidden rounded-[2.5rem] border-neutral-800 bg-black shadow-2xl",
+          "mx-auto w-full overflow-hidden rounded-[2.25rem] border-forest-deep bg-forest-deep",
           className
         )}
         style={{
@@ -92,8 +92,8 @@ export function DeviceFrame({ device, address, children, className }: DeviceFram
           borderStyle: "solid",
         }}
       >
-        <div aria-hidden className="flex h-5 items-center justify-center bg-black">
-          <span className="h-1.5 w-20 rounded-full bg-neutral-800" />
+        <div aria-hidden className="flex h-5 items-center justify-center bg-forest-deep">
+          <span className="h-1.5 w-20 rounded-full bg-cream/20" />
         </div>
         <ScaledViewport width={width} height={height}>
           {children}
@@ -105,19 +105,19 @@ export function DeviceFrame({ device, address, children, className }: DeviceFram
   return (
     <div
       className={cn(
-        "mx-auto overflow-hidden rounded-xl border border-white/15 bg-neutral-900 shadow-2xl",
+        "mx-auto overflow-hidden rounded-lg border border-cream/20 bg-forest-deep",
         className
       )}
       // Never wider than the real desktop viewport (plus the 1px borders).
       style={{ maxWidth: width + 2 }}
     >
-      <div className="flex items-center gap-3 border-b border-white/10 px-4 py-2.5">
+      <div className="flex items-center gap-3 border-b border-cream/15 px-4 py-2.5">
         <div aria-hidden className="flex gap-1.5">
-          <span className="size-2.5 rounded-full bg-red-400/80" />
-          <span className="size-2.5 rounded-full bg-amber-400/80" />
-          <span className="size-2.5 rounded-full bg-green-400/80" />
+          <span className="size-2.5 rounded-full bg-cream/20" />
+          <span className="size-2.5 rounded-full bg-cream/20" />
+          <span className="size-2.5 rounded-full bg-cream/20" />
         </div>
-        <p className="mx-auto max-w-sm min-w-0 flex-1 truncate rounded-md bg-white/10 px-3 py-1 text-center text-xs text-white/60">
+        <p className="mx-auto max-w-sm min-w-0 flex-1 truncate rounded-md bg-cream/[0.08] px-3 py-1 text-center text-xs text-cream/70">
           {address}
         </p>
         <div aria-hidden className="hidden w-12 sm:block" />

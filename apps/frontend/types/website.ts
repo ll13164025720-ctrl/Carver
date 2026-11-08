@@ -13,6 +13,8 @@
  * - Optional fields are omitted when absent (never `null`).
  */
 
+import type { WebsiteBlueprint, WebsiteCapture } from "@/types/backend"
+
 // ---------------------------------------------------------------------------
 // Shared building blocks
 // ---------------------------------------------------------------------------
@@ -210,7 +212,23 @@ export interface WebsiteDesign {
 /** What a redesign request returns. */
 export interface RedesignResult {
   projectId: string
-  /** Screenshot of the original site: an absolute http(s) URL or a site-relative path. */
+  /**
+   * Screenshot of the original site: an absolute http(s) URL or a site-relative
+   * path. Empty when the backend returned a screenshot path that cannot be
+   * turned into a URL (the "Before" pane then shows a text placeholder).
+   */
   originalScreenshotUrl: string
   design: WebsiteDesign
+  /**
+   * Real backend only (absent for the built-in sample). The backend's own
+   * description of the site. `design` is derived from it, and prompt edits send
+   * it back to the backend, so it must be kept alongside the design.
+   */
+  blueprint?: WebsiteBlueprint
+  /**
+   * Real backend only. The page capture the blueprint was made from, kept so the
+   * design can be rebuilt after an edit (hero photo, gallery, social links).
+   * Its long `text` and `headings` are emptied to keep storage small.
+   */
+  capture?: WebsiteCapture
 }

@@ -1,14 +1,22 @@
-import { isMockMode, redesignWebsite } from "@/lib/site-revive-api"
+import {
+  isMockMode,
+  redesignWebsite,
+  type RedesignStage,
+} from "@/lib/site-revive-api"
 import type { RedesignResult } from "@/types/website"
 
 /**
  * Runs a redesign through the SiteRevive API client and tracks it for the UI.
  *
- * The stages below are driven by a timer in both modes. They do not reflect
- * real work. In mock mode the result is held back so every stage is visible.
- * In API mode the result is shown as soon as the backend answers. Real
- * per-stage progress needs a status contract from the backend (see the
- * asynchronous jobs section in lib/site-revive-api.ts).
+ * Mock mode: the stages are driven by a timer and do not reflect real work. The
+ * result is held back so every stage is visible.
+ *
+ * API mode: the backend has no progress feed, but the client makes two
+ * requests, so the job knows which one is running. While the website is being
+ * captured the timer advances through the first two stages and stops there.
+ * Once the AI request starts the job moves to the "Creating a modern design"
+ * stage and stays until the result arrives. The result is shown as soon as the
+ * backend answers.
  */
 
 export const REDESIGN_STAGES = [
@@ -20,10 +28,17 @@ export const REDESIGN_STAGES = [
 
 export const STAGE_DURATION_MS = 1600
 
+/** Last stage the timer may show while the website is still being captured. */
+const LAST_CAPTURE_STAGE = 1
+/** Stage shown while the AI creates the design. */
+const DESIGN_STAGE = 2
+
 export interface RedesignJob {
-  /** Epoch ms when the job started, used to work out the simulated stage. */
+  /** Epoch ms when the job started. */
   startedAt: number
   promise: Promise<RedesignResult>
+  /** Index into REDESIGN_STAGES to show right now. */
+  stageIndex: () => number
 }
 
 /** One running job per URL, so repeated triggers never start a second request. */
@@ -39,10 +54,11 @@ export function stageIndexAt(elapsedMs: number): number {
 
 async function run(
   url: string,
-  options: { simulateFailure?: boolean }
+  options: { simulateFailure?: boolean },
+  onStage: (stage: RedesignStage) => void
 ): Promise<RedesignResult> {
   // Real backend: no artificial delay and no simulated failure.
-  if (!isMockMode()) return redesignWebsite(url)
+  if (!isMockMode()) return redesignWebsite(url, { onStage })
 
   if (options.simulateFailure) {
     // Fail part-way through so the failed stage is visible.
@@ -70,7 +86,21 @@ export function startRedesignJob(
   const existing = inFlight.get(url)
   if (existing) return existing
 
-  const job: RedesignJob = { startedAt: Date.now(), promise: run(url, options) }
+  const startedAt = Date.now()
+  let stage: RedesignStage | null = null
+
+  const job: RedesignJob = {
+    startedAt,
+    promise: run(url, options, (next) => {
+      stage = next
+    }),
+    stageIndex: () => {
+      const byTime = stageIndexAt(Date.now() - startedAt)
+      if (stage === "capturing") return Math.min(byTime, LAST_CAPTURE_STAGE)
+      if (stage === "designing") return DESIGN_STAGE
+      return byTime
+    },
+  }
   inFlight.set(url, job)
 
   const release = () => {
