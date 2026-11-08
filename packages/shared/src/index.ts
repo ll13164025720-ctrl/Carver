@@ -6,7 +6,7 @@ export const WebsiteSectionTypeSchema = z.enum([
   "about",
   "menu",
   "contact",
-  "footer"
+  "footer",
 ]);
 
 export const WebsiteSectionSchema = z.object({
@@ -15,33 +15,39 @@ export const WebsiteSectionSchema = z.object({
   visible: z.boolean().default(true),
   // Section content is intentionally flexible in the MVP. The renderer will
   // interpret fields based on `type`; never render arbitrary HTML from this data.
-  content: z.record(z.string(), z.unknown())
+  content: z.record(z.string(), z.unknown()),
 });
 
 export const WebsiteBlueprintSchema = z.object({
   schemaVersion: z.literal("1.0"),
   siteId: z.string().min(1).max(100),
-  slug: z.string().min(1).max(80).regex(/^[a-z0-9-]+$/),
+  slug: z
+    .string()
+    .min(1)
+    .max(80)
+    .regex(/^[a-z0-9-]+$/),
   businessName: z.string().min(1).max(120),
   description: z.string().max(500).default(""),
   theme: z.object({
     primaryColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
     secondaryColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
-    fontFamily: z.string().min(1).max(80)
+    fontFamily: z.string().min(1).max(80),
   }),
-  sections: z.array(WebsiteSectionSchema).min(3).max(12)
+  sections: z.array(WebsiteSectionSchema).min(3).max(12),
 });
 
 export const GenerateBlueprintRequestSchema = z.object({
+  projectId: z.string().uuid().optional(),
   businessName: z.string().trim().min(1).max(120),
   businessType: z.string().trim().max(80).optional(),
   description: z.string().trim().max(1000).optional(),
   sourceUrl: z.string().url().max(2048).optional(),
-  sourceContent: z.string().max(12000).optional()
+  sourceContent: z.string().max(12000).optional(),
 });
 
 export const CaptureSiteRequestSchema = z.object({
-  sourceUrl: z.string().trim().url().max(2048)
+  sourceUrl: z.string().trim().url().max(2048),
+  businessName: z.string().trim().min(1).max(120).optional(),
 });
 
 export const WebsiteCaptureSchema = z.object({
@@ -51,23 +57,35 @@ export const WebsiteCaptureSchema = z.object({
   capturedAt: z.string().min(1).max(40),
   title: z.string().max(300),
   description: z.string().max(1000),
-  headings: z.array(z.object({
-    level: z.number().int().min(1).max(6),
-    text: z.string().max(500)
-  })).max(100),
+  headings: z
+    .array(
+      z.object({
+        level: z.number().int().min(1).max(6),
+        text: z.string().max(500),
+      }),
+    )
+    .max(100),
   text: z.string().max(20000),
-  links: z.array(z.object({
-    text: z.string().max(300),
-    url: z.string().max(2048)
-  })).max(100),
-  images: z.array(z.object({
-    src: z.string().url().max(2048),
-    alt: z.string().max(500)
-  })).max(100),
+  links: z
+    .array(
+      z.object({
+        text: z.string().max(300),
+        url: z.string().max(2048),
+      }),
+    )
+    .max(100),
+  images: z
+    .array(
+      z.object({
+        src: z.string().url().max(2048),
+        alt: z.string().max(500),
+      }),
+    )
+    .max(100),
   screenshots: z.object({
     desktop: z.string().min(1).max(2048),
-    mobile: z.string().min(1).max(2048)
-  })
+    mobile: z.string().min(1).max(2048),
+  }),
 });
 
 const JsonValueSchema = z.unknown().refine((value) => {
@@ -82,7 +100,8 @@ const JsonValueSchema = z.unknown().refine((value) => {
 export const BlueprintEditOperationSchema = z.object({
   type: z.literal("set"),
   sectionId: z.string().min(1).max(80),
-  field: z.string()
+  field: z
+    .string()
     .min(1)
     .max(80)
     .regex(/^[A-Za-z][A-Za-z0-9_-]*$/)
@@ -97,27 +116,33 @@ export const BlueprintEditOperationSchema = z.object({
           "constructor",
           "dangerouslySetInnerHTML",
           "innerHTML",
-          "outerHTML"
+          "outerHTML",
         ].includes(field) && !/^on[A-Z]/.test(field),
-      "This field cannot be edited"
+      "This field cannot be edited",
     ),
-  value: JsonValueSchema
+  value: JsonValueSchema,
 });
 
 export const BlueprintEditOperationsSchema = z.object({
-  operations: z.array(BlueprintEditOperationSchema).min(1).max(8)
+  operations: z.array(BlueprintEditOperationSchema).min(1).max(8),
 });
 
 export const EditBlueprintRequestSchema = z.object({
+  projectId: z.string().uuid().optional(),
+  baseVersion: z.number().int().min(1).optional(),
   blueprint: WebsiteBlueprintSchema,
-  prompt: z.string().trim().min(1).max(1000)
+  prompt: z.string().trim().min(1).max(1000),
 });
 
 export type WebsiteSectionType = z.infer<typeof WebsiteSectionTypeSchema>;
 export type WebsiteSection = z.infer<typeof WebsiteSectionSchema>;
 export type WebsiteBlueprint = z.infer<typeof WebsiteBlueprintSchema>;
-export type GenerateBlueprintRequest = z.infer<typeof GenerateBlueprintRequestSchema>;
+export type GenerateBlueprintRequest = z.infer<
+  typeof GenerateBlueprintRequestSchema
+>;
 export type CaptureSiteRequest = z.infer<typeof CaptureSiteRequestSchema>;
 export type WebsiteCapture = z.infer<typeof WebsiteCaptureSchema>;
-export type BlueprintEditOperation = z.infer<typeof BlueprintEditOperationSchema>;
+export type BlueprintEditOperation = z.infer<
+  typeof BlueprintEditOperationSchema
+>;
 export type EditBlueprintRequest = z.infer<typeof EditBlueprintRequestSchema>;

@@ -32,7 +32,16 @@ The local SAM template points to `http://host.docker.internal:3002/capture` beca
 
 ## Model configuration
 
-The Python helper currently uses the `us.meta.llama4-scout-17b-instruct-v1:0` inference profile. The TypeScript template defaults to `us.amazon.nova-2-lite-v1:0`. Both use the Bedrock Converse API; change `BEDROCK_MODEL_ID` in `apps/backend/template.yaml` to whichever inference profile is enabled and tested in the Workshop account.
+The Python helper and TypeScript backend are configured to use
+the Amazon Bedrock inference profile:
+
+`us.meta.llama4-scout-17b-instruct-v1:0`
+
+Both use the Bedrock Converse API.
+
+The TypeScript backend reads its model configuration from
+`BEDROCK_MODEL_ID`, which can be changed to another inference
+profile enabled in the AWS Workshop account.
 
 ## Deployment notes
 

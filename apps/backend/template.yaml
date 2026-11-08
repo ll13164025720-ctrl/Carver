@@ -31,22 +31,58 @@ Resources:
     Properties:
       CodeUri: ../..
       Handler: apps/backend/src/handler.handler
+
       Environment:
         Variables:
-          BEDROCK_MODEL_ID: us.amazon.nova-2-lite-v1:0
-          # SAM local runs the Lambda in Docker; host.docker.internal reaches
-          # the Playwright worker running on the developer's Mac.
+          PROJECTS_TABLE: !Ref ProjectsTable
+          VERSIONS_TABLE: !Ref BlueprintVersionsTable
+          ASSETS_BUCKET: !Ref SiteReviveAssetsBucket
+          BEDROCK_MODEL_ID: us.meta.llama4-scout-17b-instruct-v1:0
+
+          # SAM local: access the Playwright worker on the host Mac.
           CAPTURE_WORKER_URL: http://host.docker.internal:3002/capture
           CAPTURE_WORKER_PUBLIC_URL: http://localhost:3002
+
       Policies:
-        # Hackathon MVP: broad resource scope is used because inference profiles
-        # can route to foundation models in multiple US regions. Narrow this
-        # to approved inference-profile/model ARNs before production.
+        # Only the DynamoDB operations required by the backend.
         - Statement:
-            - Effect: Allow
+            - Sid: ProjectsTableAccess
+              Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+              Resource:
+                - !GetAtt ProjectsTable.Arn
+
+            - Sid: BlueprintVersionsTableAccess
+              Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:Query
+              Resource:
+                - !GetAtt BlueprintVersionsTable.Arn
+
+            # The backend can only read and write objects
+            # under the projects/ prefix in its private bucket.
+            - Sid: ProjectAssetsAccess
+              Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+              Resource:
+                - !Sub "${SiteReviveAssetsBucket.Arn}/projects/*"
+
+            # Hackathon MVP: inference profile may route to
+            # approved foundation models in multiple US regions.
+            # Narrow this permission before production.
+            - Sid: BedrockInvocation
+              Effect: Allow
               Action:
                 - bedrock:InvokeModel
               Resource: "*"
+
       Events:
         Health:
           Type: HttpApi
@@ -54,24 +90,28 @@ Resources:
             ApiId: !Ref SiteReviveHttpApi
             Path: /health
             Method: GET
+
         CaptureWebsite:
           Type: HttpApi
           Properties:
             ApiId: !Ref SiteReviveHttpApi
             Path: /api/captures
             Method: POST
+
         EditBlueprint:
           Type: HttpApi
           Properties:
             ApiId: !Ref SiteReviveHttpApi
             Path: /api/blueprints/edit
             Method: POST
+
         GenerateBlueprint:
           Type: HttpApi
           Properties:
             ApiId: !Ref SiteReviveHttpApi
             Path: /api/blueprints/generate
             Method: POST
+
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
@@ -82,6 +122,52 @@ Resources:
         Sourcemap: true
         Target: es2022
         Format: cjs
+
+  ProjectsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: projectId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: projectId
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+
+  BlueprintVersionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: projectId
+          AttributeType: S
+        - AttributeName: versionId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: projectId
+          KeyType: HASH
+        - AttributeName: versionId
+          KeyType: RANGE
+      SSESpecification:
+        SSEEnabled: true
+
+  SiteReviveAssetsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      # All four public-access protections remain enabled.
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+
+      # Explicitly configure encryption at rest using SSE-S3.
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
 
 Outputs:
   SiteReviveApiUrl:
