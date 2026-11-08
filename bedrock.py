@@ -40,7 +40,7 @@ try:
     response = client.converse(
         modelId=model_id,
         messages=conversation,
-        inferenceConfig={"maxTokens": 512, "temperature": 0.5, "topP": 0.9},
+        inferenceConfig={"maxTokens": 512},
     )
 
     response_actual = response["output"]["message"]["content"]
