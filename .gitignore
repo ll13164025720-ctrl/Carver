@@ -38,3 +38,8 @@ test-results/
 # Sensitive credentials
 *.pem
 *.key
+# Local SAM env overrides (deployed resource names)
+env.json
+
+# Capture worker screenshot artifacts
+apps/capture-worker/.data/

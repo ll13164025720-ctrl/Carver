@@ -82,6 +82,54 @@ export async function getJson<T>(key: string): Promise<T | null> {
 }
 
 /**
+ * Upload a finished HTML document (a published website snapshot).
+ */
+export async function uploadHtml(key: string, html: string): Promise<void> {
+  validateKey(key);
+
+  await s3Client.send(
+    new PutObjectCommand({
+      Bucket: getBucketName(),
+      Key: key,
+      Body: html,
+      ContentType: "text/html; charset=utf-8",
+    }),
+  );
+}
+
+/**
+ * Retrieve a text object from S3.
+ * Returns null if the object does not exist.
+ */
+export async function getText(key: string): Promise<string | null> {
+  validateKey(key);
+
+  try {
+    const result = await s3Client.send(
+      new GetObjectCommand({
+        Bucket: getBucketName(),
+        Key: key,
+      }),
+    );
+
+    if (!result.Body) {
+      return null;
+    }
+
+    return await result.Body.transformToString("utf-8");
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      (error.name === "NoSuchKey" || error.name === "NotFound")
+    ) {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
+/**
  * Upload an image, screenshot, or other binary asset.
  */
 export async function uploadBytes(

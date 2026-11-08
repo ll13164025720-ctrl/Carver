@@ -26,6 +26,7 @@ export interface ProjectRecord {
   mobileScreenshotKey?: string;
 
   publishedVersion?: number;
+  publishedAt?: string;
 
   createdAt: string;
   updatedAt: string;
@@ -151,6 +152,62 @@ export async function setProjectCapture(
         ":desktopKey": keys.desktopScreenshotKey,
         ":mobileKey": keys.mobileScreenshotKey,
         ":status": "CAPTURED",
+        ":updatedAt": new Date().toISOString(),
+      },
+    }),
+  );
+}
+
+/**
+ * Record that a version is now live.
+ */
+export async function setProjectPublished(
+  projectId: string,
+  versionNumber: number,
+  publishedAt: string,
+): Promise<void> {
+  await dynamoDb.send(
+    new UpdateCommand({
+      TableName: getTableName(),
+      Key: { projectId },
+      UpdateExpression: `
+        SET publishedVersion = :version,
+            publishedAt = :publishedAt,
+            #projectStatus = :status,
+            updatedAt = :publishedAt
+      `,
+      ConditionExpression: "attribute_exists(projectId)",
+      ExpressionAttributeNames: {
+        "#projectStatus": "status",
+      },
+      ExpressionAttributeValues: {
+        ":version": versionNumber,
+        ":publishedAt": publishedAt,
+        ":status": "PUBLISHED",
+      },
+    }),
+  );
+}
+
+/**
+ * Take the website offline. The saved versions are untouched.
+ */
+export async function setProjectUnpublished(projectId: string): Promise<void> {
+  await dynamoDb.send(
+    new UpdateCommand({
+      TableName: getTableName(),
+      Key: { projectId },
+      UpdateExpression: `
+        REMOVE publishedVersion, publishedAt
+        SET #projectStatus = :status,
+            updatedAt = :updatedAt
+      `,
+      ConditionExpression: "attribute_exists(projectId)",
+      ExpressionAttributeNames: {
+        "#projectStatus": "status",
+      },
+      ExpressionAttributeValues: {
+        ":status": "READY",
         ":updatedAt": new Date().toISOString(),
       },
     }),

@@ -471,7 +471,7 @@ function invalidResponse(what: string, detail?: string): SiteReviveApiError {
 // HTTP
 // ---------------------------------------------------------------------------
 
-type Operation = "capture" | "generate" | "edit" | "history"
+type Operation = "capture" | "generate" | "edit" | "history" | "publish"
 
 /** Message from { error: "..." }, { error: { message } } or { detail: "..." }, if present. */
 function serverMessage(text: string): string | null {
@@ -521,6 +521,9 @@ const TEXT = {
   projectGone: "This project is no longer available. Start a new redesign.",
   historyFailed: "We couldn't load the version history. Please try again.",
   editTimeout: "The AI took too long to answer, so we stopped waiting. Please try again.",
+  publishFailed: "We couldn't publish your website right now. Please try again.",
+  publishRejected: "This website can't be published. Please try again after making a change.",
+  publishTimeout: "Publishing took too long, so we stopped waiting. Please try again.",
 } as const
 
 /** `latestVersion` from a 409 body, if it is a sensible number. */
@@ -563,7 +566,9 @@ function httpError(status: number, text: string, operation: Operation): SiteRevi
         ? TEXT.captureTimeout
         : operation === "generate"
           ? TEXT.generateTimeout
-          : TEXT.editTimeout
+          : operation === "publish"
+            ? TEXT.publishTimeout
+            : TEXT.editTimeout
     return new SiteReviveApiError("timeout", message, { ...base, retryable: true })
   }
   if (status === 401 || status === 403) {
@@ -576,7 +581,9 @@ function httpError(status: number, text: string, operation: Operation): SiteRevi
   if (status === 404) {
     // The backend says "Project not found." / "Version not found." for a missing
     // project. Anything else is a missing route or server.
-    const projectMissing = (operation === "edit" || operation === "history") && /not found/i.test(detail ?? "")
+    const projectMissing =
+      (operation === "edit" || operation === "history" || operation === "publish") &&
+      /not found/i.test(detail ?? "")
     return new SiteReviveApiError(
       "not_found",
       projectMissing ? TEXT.projectGone : "The CARVER service could not be found. Please try again later.",
@@ -594,7 +601,9 @@ function httpError(status: number, text: string, operation: Operation): SiteRevi
           : TEXT.captureRejected
         : operation === "generate"
           ? TEXT.generateRejected
-          : TEXT.editRejected
+          : operation === "publish"
+            ? TEXT.publishRejected
+            : TEXT.editRejected
     return new SiteReviveApiError("bad_request", message, base)
   }
 
@@ -618,7 +627,9 @@ function httpError(status: number, text: string, operation: Operation): SiteRevi
       ? TEXT.generateFailed
       : operation === "history"
         ? TEXT.historyFailed
-        : TEXT.editFailed,
+        : operation === "publish"
+          ? TEXT.publishFailed
+          : TEXT.editFailed,
     { ...base, retryable }
   )
 }
@@ -1194,4 +1205,158 @@ export async function fetchVersion(
   const normalized = normalizeResult(body, capture)
   if (!normalized.ok) throw invalidResponse("saved version", normalized.error)
   return { content: normalized.content, versionNumber }
+}
+
+// ---------------------------------------------------------------------------
+// Publishing
+// ---------------------------------------------------------------------------
+
+/** Publishing writes one file and one record: no model call, so it is quick. */
+export const PUBLISH_TIMEOUT_MS = 30_000
+
+/** Whether a project's website is live, and where. */
+export interface PublishState {
+  /** The saved version that is live, or null when the site is not published. */
+  publishedVersion: number | null
+  /** The public address of the live site. null when not published. */
+  siteUrl: string | null
+  /** ISO timestamp of the last publish. */
+  publishedAt: string | null
+}
+
+function readPublishState(source: unknown): PublishState {
+  const record = isObj(source) ? source : {}
+  const publishedVersion = validVersionNumber(record.publishedVersion) ?? null
+  // The address is shown as a link, so only a plain http(s) URL is accepted.
+  const siteUrl =
+    publishedVersion !== null && typeof record.siteUrl === "string"
+      ? (safeExternalHref(record.siteUrl) ?? null)
+      : null
+  const publishedAt =
+    publishedVersion !== null && typeof record.publishedAt === "string" ? record.publishedAt : null
+  return { publishedVersion, siteUrl, publishedAt }
+}
+
+/** Whether the project is live right now. */
+export async function fetchPublishState(
+  projectId: string,
+  options: RequestOptions = {}
+): Promise<PublishState> {
+  const config = apiConfigOrThrow()
+  const body = await requestJson(
+    "GET", config.baseUrl, projectPath(projectId), undefined, "history",
+    options.timeoutMs ?? HISTORY_TIMEOUT_MS, options.signal
+  )
+  if (!isObj(body) || !isObj(body.project)) throw invalidResponse("saved project")
+  return readPublishState(body.project)
+}
+
+/**
+ * Makes a saved version the live website. The live site is a snapshot: edits
+ * made afterwards do not appear until the site is published again.
+ */
+export async function publishWebsite(
+  projectId: string,
+  versionNumber: number,
+  options: RequestOptions = {}
+): Promise<PublishState> {
+  const config = apiConfigOrThrow()
+  if (validVersionNumber(versionNumber) === undefined) {
+    throw new SiteReviveApiError("not_found", "That version does not exist.")
+  }
+  const body = await requestJson(
+    "POST", config.baseUrl, `${projectPath(projectId)}/publish`, { versionNumber }, "publish",
+    options.timeoutMs ?? PUBLISH_TIMEOUT_MS, options.signal
+  )
+  const state = readPublishState(body)
+  if (state.publishedVersion === null || state.siteUrl === null) {
+    throw invalidResponse("publish result")
+  }
+  return state
+}
+
+/** Takes the live website offline. Saved versions are kept. */
+export async function unpublishWebsite(
+  projectId: string,
+  options: RequestOptions = {}
+): Promise<void> {
+  const config = apiConfigOrThrow()
+  await requestJson(
+    "POST", config.baseUrl, `${projectPath(projectId)}/unpublish`, {}, "publish",
+    options.timeoutMs ?? PUBLISH_TIMEOUT_MS, options.signal
+  )
+}
+
+/**
+ * Saves one version as a single standalone .html file that the owner can host
+ * anywhere. Works whether or not the site is published.
+ */
+export async function downloadWebsite(
+  projectId: string,
+  versionNumber: number,
+  options: RequestOptions = {}
+): Promise<void> {
+  const config = apiConfigOrThrow()
+  if (validVersionNumber(versionNumber) === undefined) {
+    throw new SiteReviveApiError("not_found", "That version does not exist.")
+  }
+
+  const controller = new AbortController()
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, options.timeoutMs ?? PUBLISH_TIMEOUT_MS)
+  const forwardAbort = () => controller.abort()
+  if (options.signal?.aborted) controller.abort()
+  else options.signal?.addEventListener("abort", forwardAbort, { once: true })
+
+  try {
+    let response: Response
+    let text: string
+    try {
+      response = await fetch(
+        `${config.baseUrl}${projectPath(projectId)}/export?version=${versionNumber}`,
+        {
+          method: "GET",
+          headers: { Accept: "text/html" },
+          credentials: "omit",
+          cache: "no-store",
+          signal: controller.signal,
+        }
+      )
+      text = await response.text()
+    } catch (cause) {
+      if (timedOut) {
+        throw new SiteReviveApiError(
+          "timeout",
+          "The download took too long, so we stopped waiting. Please try again.",
+          { retryable: true, cause }
+        )
+      }
+      if (options.signal?.aborted) {
+        throw new SiteReviveApiError("aborted", "The request was cancelled.", { cause })
+      }
+      throw new SiteReviveApiError(
+        "network",
+        "We couldn't reach the CARVER service. Check your connection and try again.",
+        { retryable: true, cause }
+      )
+    }
+    if (!response.ok) throw httpError(response.status, text, "publish")
+
+    // Save it as a file. The page is only written to disk, never opened here.
+    const url = URL.createObjectURL(new Blob([text], { type: "text/html;charset=utf-8" }))
+    const link = document.createElement("a")
+    link.href = url
+    link.download = `website-version-${versionNumber}.html`
+    link.rel = "noopener"
+    document.body.append(link)
+    link.click()
+    link.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 10_000)
+  } finally {
+    clearTimeout(timer)
+    options.signal?.removeEventListener("abort", forwardAbort)
+  }
 }

@@ -16,6 +16,7 @@ import {
   type PromptEditFeedback,
 } from "@/components/site-revive/prompt-editor"
 import { ProcessingFallback } from "@/components/site-revive/processing-fallback"
+import { PublishPanel } from "@/components/site-revive/publish-panel"
 import { VersionHistory } from "@/components/site-revive/version-history"
 import { WebsiteRenderer } from "@/components/site-revive/website-renderer"
 import { DEMO_EDIT_COMMANDS } from "@/lib/design-editor"
@@ -285,6 +286,15 @@ export function PreviewWorkspace() {
           examples={isMockMode() ? DEMO_EDIT_COMMANDS : API_EDIT_EXAMPLES}
           placeholder={isMockMode() ? undefined : API_EDIT_PLACEHOLDER}
           className={cn("cv-surface p-5 sm:p-6", conflict ? "mt-4" : "mt-8")}
+        />
+      ) : null}
+
+      {showAfter && !isMockMode() && versionNumber && shown.kind === "page" ? (
+        <PublishPanel
+          projectId={result.projectId}
+          shownVersion={viewing?.versionNumber ?? versionNumber}
+          latestVersion={versionNumber}
+          className="mt-4"
         />
       ) : null}
 
