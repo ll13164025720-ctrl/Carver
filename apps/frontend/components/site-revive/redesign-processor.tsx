@@ -10,11 +10,7 @@ import {
   type ProcessingStatus,
 } from "@/components/site-revive/processing-stages"
 import { Button, buttonVariants } from "@/components/ui/button"
-import {
-  REDESIGN_STAGES,
-  stageIndexAt,
-  startRedesignJob,
-} from "@/lib/redesign-job"
+import { REDESIGN_STAGES, startRedesignJob } from "@/lib/redesign-job"
 import { clearProject, saveProject } from "@/lib/redesign-session"
 import { isMockMode } from "@/lib/site-revive-api"
 import { cn } from "@/lib/utils"
@@ -97,7 +93,7 @@ function ProcessingView({ url, hostname, simulateFailure }: ProcessingViewProps)
     })
 
     const ticker = setInterval(() => {
-      setStageIndex(stageIndexAt(Date.now() - job.startedAt))
+      setStageIndex(job.stageIndex())
     }, 250)
 
     job.promise.then(
@@ -129,7 +125,7 @@ function ProcessingView({ url, hostname, simulateFailure }: ProcessingViewProps)
         clearInterval(ticker)
         setPhase({
           status: "error",
-          failedStage: stageIndexAt(Date.now() - job.startedAt),
+          failedStage: job.stageIndex(),
           message:
             error instanceof Error && error.message
               ? error.message
