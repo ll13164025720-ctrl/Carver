@@ -368,13 +368,8 @@ function invalidResponse(what: string, detail?: string): SiteReviveApiError {
   warnInDevelopment(`The backend sent an unreadable ${what}${detail ? `: ${detail}` : "."}`)
   return new SiteReviveApiError(
     "invalid_response",
-<<<<<<< HEAD
-    `The SiteRevive service sent a ${what} we couldn't read. Please try again.`,
-    { retryable: true, detail }
-=======
     `The CARVER service sent a ${what} we couldn't read. Please try again.`,
-    { retryable: true }
->>>>>>> 6741a30c336db980f9c311bf3a73dfd0fa89e7f3
+    { retryable: true, detail }
   )
 }
 
@@ -418,7 +413,7 @@ const TEXT = {
   captureRejected: "That website address was not accepted. Check it and try again.",
   captureTimeout: "That website took too long to load, so we stopped waiting. Please try again.",
   generateFailed: "The AI couldn't create a design this time. Please try again.",
-  generateRejected: "The SiteRevive service could not use that website's content. Please try again.",
+  generateRejected: "The CARVER service could not use that website's content. Please try again.",
   generateTimeout: "The AI took too long to answer, so we stopped waiting. Please try again.",
   editFailed:
     "We couldn't apply that change. Try rephrasing it, for example: Change the hero headline to Welcome.",
@@ -435,7 +430,6 @@ function httpError(status: number, text: string, operation: Operation): SiteRevi
 
   if (status === 429) {
     return new SiteReviveApiError(
-<<<<<<< HEAD
       "rate_limited",
       "Too many requests right now. Wait a moment and try again.",
       { ...base, retryable: true }
@@ -453,20 +447,14 @@ function httpError(status: number, text: string, operation: Operation): SiteRevi
   if (status === 401 || status === 403) {
     return new SiteReviveApiError(
       "server",
-      "The SiteRevive service refused the request. Please try again later.",
+      "The CARVER service refused the request. Please try again later.",
       base
-=======
-      "bad_request",
-      serverMessage(text) ?? "The CARVER service could not accept that request.",
-      { status }
->>>>>>> 6741a30c336db980f9c311bf3a73dfd0fa89e7f3
     )
   }
   if (status === 404) {
     return new SiteReviveApiError(
       "not_found",
-<<<<<<< HEAD
-      "The SiteRevive service could not be found. Please try again later.",
+      "The CARVER service could not be found. Please try again later.",
       base
     )
   }
@@ -483,20 +471,6 @@ function httpError(status: number, text: string, operation: Operation): SiteRevi
           ? TEXT.generateRejected
           : TEXT.editRejected
     return new SiteReviveApiError("bad_request", message, base)
-=======
-      operation === "edit"
-        ? "This project is no longer available. Start a new redesign."
-        : "The CARVER service could not be found. Please try again later.",
-      { status }
-    )
-  }
-  if (status === 408 || status === 504) {
-    return new SiteReviveApiError(
-      "timeout",
-      "The CARVER service took too long to answer. Please try again.",
-      { status, retryable: true }
-    )
->>>>>>> 6741a30c336db980f9c311bf3a73dfd0fa89e7f3
   }
 
   const retryable = status >= 500
@@ -506,13 +480,8 @@ function httpError(status: number, text: string, operation: Operation): SiteRevi
   }
   return new SiteReviveApiError(
     "server",
-<<<<<<< HEAD
     operation === "generate" ? TEXT.generateFailed : TEXT.editFailed,
     { ...base, retryable }
-=======
-    "The CARVER service ran into a problem. Please try again.",
-    { status, retryable: status >= 500 }
->>>>>>> 6741a30c336db980f9c311bf3a73dfd0fa89e7f3
   )
 }
 
@@ -576,16 +545,6 @@ async function postJson(
       )
     }
 
-<<<<<<< HEAD
-=======
-    if (response.status === 202) {
-      throw new SiteReviveApiError(
-        "async_unsupported",
-        "The CARVER service started a background job, which this version of the app can't follow yet.",
-        { status: 202 }
-      )
-    }
->>>>>>> 6741a30c336db980f9c311bf3a73dfd0fa89e7f3
     if (!response.ok) throw httpError(response.status, text, operation)
 
     try {

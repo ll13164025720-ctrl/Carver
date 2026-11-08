@@ -167,14 +167,9 @@ export function PreviewWorkspace() {
       {showAfter ? (
         <PromptEditor
           onApply={applyPrompt}
-<<<<<<< HEAD
           examples={isMockMode() ? DEMO_EDIT_COMMANDS : API_EDIT_EXAMPLES}
           placeholder={isMockMode() ? undefined : API_EDIT_PLACEHOLDER}
-          className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-4 sm:p-5"
-=======
-          examples={DEMO_EDIT_COMMANDS}
           className="cv-surface mt-8 p-5 sm:p-6"
->>>>>>> 6741a30c336db980f9c311bf3a73dfd0fa89e7f3
         />
       ) : null}
 
